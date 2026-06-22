@@ -1,0 +1,193 @@
+SIMULATION REQUIREMENTS: Displacement statistics of a passive tracer coupled to an AOUP via hydrodynamic dipole force
+=====================================================================================================================
+
+BACKGROUND
+----------
+We want to compute the single-scattering displacement distribution of a passive tracer
+interacting with a single active Ornstein-Uhlenbeck particle (AOUP) via a hydrodynamic
+dipole force. This is the building block for the full tracer displacement statistics in a
+dilute active suspension, which is given by a Poisson sum of independent single-scattering
+contributions (to first order in swimmer density rho).
+
+The tracer is held fixed at the origin (first-order approximation in tracer mobility mu,
+valid when mu * |p| / b_min^2 << v_A). The AOUP moves freely and exerts a force on the
+tracer. For each AOUP trajectory starting at position y, we compute the time-integrated
+force (the "scattering increment"):
+
+    A(y) = integral_0^T  f_x( X(u), n(u) )  du
+
+where:
+  - X(u) is the 2D position of the AOUP at time u
+  - n(u) = V(u) / |V(u)| is the instantaneous orientation of the AOUP
+  - f_x is the x-component of the hydrodynamic dipole force (projection onto x-axis)
+  - T is the total simulation time (long enough for the limit distribution to emerge)
+
+The distribution of A, averaged over starting positions y drawn with importance sampling,
+gives the single-scattering displacement distribution.
+
+
+AOUP DYNAMICS
+-------------
+The AOUP satisfies the overdamped Langevin equations in 2D:
+
+    dX/dt = V
+    tau_c * dV/dt = -V + sqrt(2 * D_A) * xi(t)
+
+where xi(t) is 2D Gaussian white noise with zero mean and unit variance per component.
+
+Parameters:
+  - tau_c   : persistence time (e.g. tau_c = 1.0)
+  - D_A     : active diffusivity (e.g. D_A = 1.0)
+  - Typical active speed: v_A = sqrt(D_A / tau_c)
+
+Initial conditions:
+  - X(0) = y  (starting position, drawn via importance sampling, see below)
+  - V(0) drawn from stationary distribution: each component ~ N(0, D_A / tau_c)
+
+
+HYDRODYNAMIC DIPOLE FORCE
+--------------------------
+The 2D hydrodynamic dipole force exerted by the AOUP on the tracer at the origin is:
+
+    F_hyd(x, n) = (p / |x|^2) * ( 3*(n.x)^2/|x|^2 - 1 ) * x/|x|
+
+where:
+  - x = X(u) - 0 = X(u)  is the vector from tracer (at origin) to swimmer
+  - n = V(u) / |V(u)|     is the swimmer orientation unit vector
+  - p                     is the dipole strength (fixed parameter, e.g. p = 1.0)
+  - |x| = sqrt(x1^2 + x2^2)
+
+The x-component (projection onto x-axis) used in A(y) is:
+
+    f_x(x, n) = (p / |x|^3) * ( 3*(n.x)^2/|x|^2 - 1 ) * x1
+
+where x1 is the x-coordinate of x.
+
+IMPORTANT: The force diverges as |x| -> 0. A hard-core cutoff is applied: if |x| < b_min,
+set f_x = 0 for that timestep. This is physically motivated by the finite swimmer size.
+
+Validity condition for the first-order approximation:
+    mu * |p| / b_min^2 << v_A = sqrt(D_A / tau_c)
+
+
+IMPORTANCE SAMPLING
+--------------------
+The starting position y is parameterised in polar coordinates: y = (b * cos(theta), b * sin(theta)).
+
+Instead of drawing b uniformly (which gives p_true(b) proportional to b in 2D), we draw b
+from a biased distribution:
+
+    p_bias(b) proportional to b^(1 + gamma)   on [b_min, b_max]
+
+with gamma = -2, i.e. p_bias(b) proportional to 1/b (uniform in log b).
+
+The angle theta is drawn uniformly in [0, 2*pi).
+
+The importance weight for each trajectory is:
+
+    w(b) = p_true(b) / p_bias(b) = b^2 / (normalisation constant)
+
+More explicitly:
+    p_true(b) proportional to b          (uniform 2D density, Jacobian factor)
+    p_bias(b) proportional to 1/b        (log-uniform sampling)
+    w(b) proportional to b^2
+
+Normalise weights so that mean(w) = 1 over the batch of N_traj trajectories.
+
+Sampling b from log-uniform distribution on [b_min, b_max]:
+    b = b_min * (b_max / b_min)^U    where U ~ Uniform(0, 1)
+
+
+NUMERICAL INTEGRATION
+----------------------
+Use Euler-Maruyama scheme for the AOUP:
+
+    X(t + dt) = X(t) + V(t) * dt
+    V(t + dt) = V(t) * (1 - dt/tau_c) + sqrt(2 * D_A / tau_c) * sqrt(dt) * N(0,1)
+
+where N(0,1) is a 2D standard normal vector (one per component).
+
+The scattering increment is accumulated as:
+
+    A += f_x(X(t), n(t)) * dt
+
+at each timestep, with the hard-core cutoff applied.
+
+Suggested parameters:
+  - dt = 1e-3 * tau_c
+  - T  = 1e3 * tau_c    (total simulation time per trajectory)
+  - Number of timesteps per trajectory: T / dt = 1e6
+  - N_traj = 1e5 to 1e6 total trajectories
+
+
+SIMULATION PARAMETERS (suggested defaults)
+-------------------------------------------
+  tau_c   = 1.0
+  D_A     = 1.0
+  p       = 1.0
+  b_min   = 0.5      (hard-core cutoff; check mu*p/b_min^2 << v_A)
+  b_max   = 50.0     (outer cutoff; contributions negligible beyond this)
+  gamma   = -2       (importance sampling exponent)
+  dt      = 1e-3
+  T       = 1e3
+  N_traj  = 1e5
+
+
+OUTPUT
+------
+For each trajectory i = 1, ..., N_traj, record:
+  - A_i   : the scattering increment (scalar, x-projection)
+  - b_i   : the impact parameter
+  - w_i   : the importance weight (normalised)
+
+From these compute and save:
+
+1. Weighted histogram of A values (the single-scattering displacement distribution):
+       P(A) estimated via weighted histogram with weights w_i
+
+2. Weighted moments:
+       <A^n>  = sum_i w_i * A_i^n / sum_i w_i    for n = 1, 2, 3, 4
+
+3. Effective sample size (diagnostic for importance sampling quality):
+       N_eff = (sum_i w_i)^2 / sum_i w_i^2
+   This should be a substantial fraction of N_traj (e.g. > 10%).
+   If N_eff << N_traj, the importance sampling is not working well.
+
+4. Raw data file: columns [b_i, A_i, w_i] for post-processing.
+
+
+CODE STRUCTURE
+--------------
+Suggested C/C++ implementation:
+
+- Use OpenMP for parallelisation over trajectories (embarrassingly parallel)
+- Each thread maintains its own random number generator (e.g. MT19937)
+- Store results in arrays of length N_traj
+- Use double precision throughout
+- Main loop: for each trajectory, (1) sample b and theta, (2) set initial conditions,
+  (3) run Euler-Maruyama for T/dt steps accumulating A, (4) store A, b, w
+- Write output to CSV or binary file
+
+Recommended libraries:
+- Standard C++ <random> for RNG
+- No external dependencies required
+- Optionally: write a simple Python script for post-processing and plotting
+
+
+VALIDATION CHECKS
+-----------------
+1. Without importance sampling (gamma = 0, uniform in b): check that the weighted
+   and unweighted histograms agree (they should, just with different statistical noise).
+
+2. Check that <A> ~ 0 by symmetry of the dipole force (the x-projection should
+   average to zero over uniform starting angles theta).
+
+3. Check N_eff / N_traj as a function of gamma to confirm gamma = -2 is reasonable.
+
+4. Check convergence with T: run with T = 100, 1000, 10000 and verify the distribution
+   is converging. This is the key diagnostic for whether T is long enough.
+
+5. Eventually: compare the distribution of the Poisson sum of N_swim ~ Poisson(rho * Volume)
+   independent A_i values against the theoretical Mittag-Leffler distribution M_{1/4}
+   after appropriate rescaling by sqrt(C * h(1/t)) where C is the non-universal constant
+   and h(s) = log(1/s) / (4*pi*D) for d=2 Brownian motion (to be generalised for AOUP).
