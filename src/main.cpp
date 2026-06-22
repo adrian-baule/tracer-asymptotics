@@ -15,7 +15,7 @@ SimParams parse_args(int argc, char* argv[]) {
     p.seed     = 42;
     p.output   = "data/output.csv";
 
-    for (int i = 1; i < argc - 1; ++i) {
+    for (int i = 1; i < argc; ++i) {
         if      (!strcmp(argv[i], "--tau_c"))   p.aoup.tau_c       = atof(argv[++i]);
         else if (!strcmp(argv[i], "--D_A"))     p.aoup.D_A         = atof(argv[++i]);
         else if (!strcmp(argv[i], "--dt"))      p.aoup.dt          = atof(argv[++i]);
