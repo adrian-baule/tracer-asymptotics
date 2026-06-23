@@ -1,7 +1,7 @@
 #include "simulation.h"
-#include "aoup.h"
 #include "force.h"
 #include "sampling.h"
+#include "swimmer_factory.h"
 #include <vector>
 #include <fstream>
 #include <iostream>
@@ -10,15 +10,12 @@
 
 void run_simulation(const SimParams& params) {
     int N = params.N_traj;
-    int n_steps = static_cast<int>(params.T / params.aoup.dt);
+    int n_steps = static_cast<int>(params.T / params.process.dt);
 
-    // Precompute constants that are the same for every trajectory / thread
-    const double dt        = params.aoup.dt;
-    const double decay     = 1.0 - dt / params.aoup.tau_c;
-    const double noise_std = std::sqrt(2.0 * params.aoup.D_A / params.aoup.tau_c * dt);
-    const double p         = params.force.p;
-    const double b_min2    = params.force.b_min * params.force.b_min;
-    const double b_min_sq  = b_min2;  // alias for clarity
+    const double dt      = params.process.dt;
+    const double p       = params.force.p;
+    const double b_min_sq = params.force.b_min * params.force.b_min;
+    const double log_ratio = std::log(params.sampling.b_max / params.sampling.b_min);
 
     std::vector<double> A_vals(N), b_vals(N), w_vals(N);
 
@@ -26,54 +23,37 @@ void run_simulation(const SimParams& params) {
     {
         int tid = omp_get_thread_num();
         std::mt19937_64 rng(params.seed + tid * 1000007ULL);
-        std::normal_distribution<double> nd(0.0, 1.0);  // one object per thread, reused every step
         std::uniform_real_distribution<double> ud(0.0, 1.0);
 
-        // Precompute sampling constants once per thread
-        const double log_ratio  = std::log(params.sampling.b_max / params.sampling.b_min);
-        const double sigma_v    = std::sqrt(params.aoup.D_A / params.aoup.tau_c);
+        auto swimmer = make_swimmer(params.process);
 
         #pragma omp for schedule(dynamic, 64)
         for (int i = 0; i < N; ++i) {
-            // Sample starting position
-            double b     = params.sampling.b_min * std::exp(ud(rng) * log_ratio); // log-uniform (gamma=-2)
+            double b     = params.sampling.b_min * std::exp(ud(rng) * log_ratio);
             double theta = ud(rng) * (2.0 * M_PI);
-            double px    = b * std::cos(theta);
-            double py    = b * std::sin(theta);
+            double x0    = b * std::cos(theta);
+            double y0    = b * std::sin(theta);
 
-            // Initial AOUP state
-            double x  = px, y  = py;
-            double vx = sigma_v * nd(rng), vy = sigma_v * nd(rng);
+            SwimmerState state = swimmer->init(x0, y0, rng);
 
             double A = 0.0;
-
             for (int s = 0; s < n_steps; ++s) {
-                // Orientation (unit vector in velocity direction)
-                double vmag = std::sqrt(vx*vx + vy*vy);
-                double nx, ny;
-                if (vmag > 1e-15) { nx = vx / vmag; ny = vy / vmag; }
-                else              { nx = 1.0; ny = 0.0; }
-
-                // Hydrodynamic dipole force x-component with hard-core cutoff
+                auto n  = swimmer->orientation(state);
+                double x = state.x, y = state.y;
                 double r2 = x*x + y*y;
                 if (r2 >= b_min_sq) {
                     double r     = std::sqrt(r2);
                     double r3    = r2 * r;
-                    double ndotx = nx*x + ny*y;
+                    double ndotx = n[0]*x + n[1]*y;
                     double cos2  = (ndotx * ndotx) / r2;
                     A += (p / r3) * (3.0 * cos2 - 1.0) * x * dt;
                 }
-
-                // Euler-Maruyama step
-                x  += vx * dt;
-                y  += vy * dt;
-                vx  = vx * decay + noise_std * nd(rng);
-                vy  = vy * decay + noise_std * nd(rng);
+                swimmer->step(state, rng);
             }
 
             b_vals[i] = b;
             A_vals[i] = A;
-            w_vals[i] = b * b;  // w(b) ~ b^(-gamma) = b^2 for gamma=-2
+            w_vals[i] = b * b;  // w(b) ~ b^2 for gamma=-2 log-uniform sampling
         }
     }
 
@@ -92,33 +72,38 @@ void run_simulation(const SimParams& params) {
 
     double var_A = 0.0, kurt_A = 0.0;
     for (int i = 0; i < N; ++i) {
-        double d = A_vals[i] - mean_A;
+        double d  = A_vals[i] - mean_A;
         double d2 = d * d;
         var_A  += w_vals[i] * d2;
         kurt_A += w_vals[i] * d2 * d2;
     }
     var_A  /= wsum;
-    kurt_A /= wsum * var_A * var_A;  // excess kurtosis denominator
+    kurt_A /= wsum * var_A * var_A;
 
     std::cout << "N_eff / N_traj    = " << N_eff / N << "\n";
     std::cout << "Weighted <A>      = " << mean_A   << " (should be ~0)\n";
     std::cout << "Weighted Var(A)   = " << var_A    << "\n";
     std::cout << "Weighted Kurt(A)  = " << kurt_A   << "\n";
 
-    // Write config file alongside the data file
+    // Write config
     {
         std::string config_path = params.output.substr(0, params.output.rfind('/') + 1) + "config.txt";
         std::ofstream cfg(config_path);
-        cfg << "tau_c   = " << params.aoup.tau_c       << "\n"
-            << "D_A     = " << params.aoup.D_A         << "\n"
-            << "dt      = " << params.aoup.dt          << "\n"
-            << "p       = " << params.force.p          << "\n"
-            << "b_min   = " << params.force.b_min      << "\n"
-            << "b_max   = " << params.sampling.b_max   << "\n"
-            << "gamma   = " << params.sampling.gamma   << "\n"
-            << "T       = " << params.T                << "\n"
-            << "N_traj  = " << params.N_traj           << "\n"
-            << "seed    = " << params.seed             << "\n";
+        cfg << "process = " << process_name()          << "\n"
+            << "tau_c   = " << params.process.tau_c    << "\n"
+            << "D_A     = " << params.process.D_A      << "\n"
+            << "v_A     = " << params.process.v_A      << "\n"
+            << "D_r     = " << params.process.D_r      << "\n"
+            << "omega   = " << params.process.omega     << "\n"
+            << "beta    = " << params.process.beta      << "\n"
+            << "dt      = " << params.process.dt        << "\n"
+            << "p       = " << params.force.p           << "\n"
+            << "b_min   = " << params.force.b_min       << "\n"
+            << "b_max   = " << params.sampling.b_max    << "\n"
+            << "gamma   = " << params.sampling.gamma    << "\n"
+            << "T       = " << params.T                 << "\n"
+            << "N_traj  = " << params.N_traj            << "\n"
+            << "seed    = " << params.seed              << "\n";
         std::cout << "Config written to " << config_path << "\n";
     }
 

@@ -4,3 +4,4 @@ data/*.png
 data/*.bin
 *.o
 *.a
+logs/*.out
