@@ -105,6 +105,23 @@ void run_simulation(const SimParams& params) {
     std::cout << "Weighted Var(A)   = " << var_A    << "\n";
     std::cout << "Weighted Kurt(A)  = " << kurt_A   << "\n";
 
+    // Write config file alongside the data file
+    {
+        std::string config_path = params.output.substr(0, params.output.rfind('/') + 1) + "config.txt";
+        std::ofstream cfg(config_path);
+        cfg << "tau_c   = " << params.aoup.tau_c       << "\n"
+            << "D_A     = " << params.aoup.D_A         << "\n"
+            << "dt      = " << params.aoup.dt          << "\n"
+            << "p       = " << params.force.p          << "\n"
+            << "b_min   = " << params.force.b_min      << "\n"
+            << "b_max   = " << params.sampling.b_max   << "\n"
+            << "gamma   = " << params.sampling.gamma   << "\n"
+            << "T       = " << params.T                << "\n"
+            << "N_traj  = " << params.N_traj           << "\n"
+            << "seed    = " << params.seed             << "\n";
+        std::cout << "Config written to " << config_path << "\n";
+    }
+
     // Write raw data
     std::ofstream out(params.output);
     out << "b,A,w\n";
