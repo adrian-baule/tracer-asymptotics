@@ -22,6 +22,7 @@ int main(int argc, char* argv[]) {
         else if (!strcmp(argv[i], "--D_r"))    p.process.D_r    = atof(argv[++i]);
         else if (!strcmp(argv[i], "--omega"))  p.process.omega  = atof(argv[++i]);
         else if (!strcmp(argv[i], "--beta"))   p.process.beta   = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--tau_0"))  p.process.tau_0  = atof(argv[++i]);
         else if (!strcmp(argv[i], "--dt"))     p.process.dt     = atof(argv[++i]);
         else if (!strcmp(argv[i], "--p"))      p.force.p        = atof(argv[++i]);
         else if (!strcmp(argv[i], "--b_min"))  p.force.b_min    = atof(argv[++i]),
@@ -34,6 +35,10 @@ int main(int argc, char* argv[]) {
         else if (!strcmp(argv[i], "--output")) p.output         = argv[++i];
         else { std::cerr << "Unknown argument: " << argv[i] << "\n"; return 1; }
     }
+
+    if (process_name() == "levy2" && p.process.tau_0 < 100.0 * p.process.dt)
+        std::cerr << "Warning: tau_0/dt = " << p.process.tau_0 / p.process.dt
+                  << ". Recommend tau_0 >> dt for levy2.\n";
 
     std::cout << "Process: " << process_name() << "\n"
               << "tau_c=" << p.process.tau_c << " D_A=" << p.process.D_A

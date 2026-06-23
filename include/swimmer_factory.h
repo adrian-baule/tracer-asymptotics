@@ -3,7 +3,8 @@
 #include "aoup_swimmer.h"
 #include "abp_swimmer.h"
 #include "rtp_swimmer.h"
-#include "levy_swimmer.h"
+#include "levy1_swimmer.h"
+#include "levy2_swimmer.h"
 #include <memory>
 #include <string>
 
@@ -17,8 +18,10 @@ struct ProcessParams {
     double D_r   = 1.0;
     // RTP
     double omega  = 1.0;
-    // Levy
-    double beta   = 1.5;
+    // Levy1 and Levy2
+    double beta   = 1.5;   // > 1 for levy1, < 1 for levy2
+    // Levy2 only
+    double tau_0  = 1.0;   // minimum run time, ignored by levy1
     // shared timestep
     double dt     = 1e-3;
 };
@@ -30,10 +33,12 @@ inline std::unique_ptr<Swimmer> make_swimmer(const ProcessParams& p) {
     return std::make_unique<ABPSwimmer>(p.v_A, p.D_r, p.dt);
 #elif defined(PROCESS_RTP)
     return std::make_unique<RTPSwimmer>(p.v_A, p.omega, p.dt);
-#elif defined(PROCESS_LEVY)
-    return std::make_unique<LevySwimmer>(p.v_A, p.beta, p.dt);
+#elif defined(PROCESS_LEVY1)
+    return std::make_unique<Levy1Swimmer>(p.v_A, p.beta, p.dt);
+#elif defined(PROCESS_LEVY2)
+    return std::make_unique<Levy2Swimmer>(p.v_A, p.beta, p.dt, p.tau_0);
 #else
-#error "No process defined. Compile with -DPROCESS_AOUP, -DPROCESS_ABP, -DPROCESS_RTP, or -DPROCESS_LEVY"
+#error "No process defined. Compile with -DPROCESS_AOUP, -DPROCESS_ABP, -DPROCESS_RTP, -DPROCESS_LEVY1, or -DPROCESS_LEVY2"
 #endif
 }
 
@@ -44,8 +49,10 @@ inline std::string process_name() {
     return "abp";
 #elif defined(PROCESS_RTP)
     return "rtp";
-#elif defined(PROCESS_LEVY)
-    return "levy";
+#elif defined(PROCESS_LEVY1)
+    return "levy1";
+#elif defined(PROCESS_LEVY2)
+    return "levy2";
 #else
     return "unknown";
 #endif

@@ -87,7 +87,7 @@ void run_simulation(const SimParams& params) {
 
     // Write config
     {
-        std::string config_path = params.output.substr(0, params.output.rfind('/') + 1) + "config.txt";
+        std::string config_path = params.output.substr(0, params.output.rfind('/') + 1) + "config_" + process_name() + ".txt";
         std::ofstream cfg(config_path);
         cfg << "process = " << process_name()          << "\n"
             << "tau_c   = " << params.process.tau_c    << "\n"
@@ -96,6 +96,7 @@ void run_simulation(const SimParams& params) {
             << "D_r     = " << params.process.D_r      << "\n"
             << "omega   = " << params.process.omega     << "\n"
             << "beta    = " << params.process.beta      << "\n"
+            << "tau_0   = " << params.process.tau_0     << "\n"
             << "dt      = " << params.process.dt        << "\n"
             << "p       = " << params.force.p           << "\n"
             << "b_min   = " << params.force.b_min       << "\n"
