@@ -5,9 +5,11 @@
 
 mkdir -p logs
 
-for PROC in aoup abp rtp levy1 levy2; do
+for PROC in aoup abp rtp levy1 levy2 bmshort; do
     if [ "$PROC" = "levy2" ]; then
         EXTRA_ARGS="--beta 0.5 --tau_0 1.0"
+    elif [ "$PROC" = "bmshort" ]; then
+        EXTRA_ARGS="--D_bm 1.0 --V_0 1.0 --sigma 1.0 --b_max 5.0"
     else
         EXTRA_ARGS=""
     fi

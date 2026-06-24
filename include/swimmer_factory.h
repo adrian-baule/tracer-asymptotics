@@ -5,6 +5,7 @@
 #include "rtp_swimmer.h"
 #include "levy1_swimmer.h"
 #include "levy2_swimmer.h"
+#include "bmshort_swimmer.h"
 #include <memory>
 #include <string>
 
@@ -22,6 +23,11 @@ struct ProcessParams {
     double beta   = 1.5;   // > 1 for levy1, < 1 for levy2
     // Levy2 only
     double tau_0  = 1.0;   // minimum run time, ignored by levy1
+    // bmshort swimmer
+    double D_bm   = 1.0;   // BM diffusion coefficient (distinct from D_A)
+    // bmshort force
+    double V_0    = 1.0;   // Gaussian potential amplitude
+    double sigma  = 1.0;   // Gaussian force range
     // shared timestep
     double dt     = 1e-3;
 };
@@ -37,8 +43,10 @@ inline std::unique_ptr<Swimmer> make_swimmer(const ProcessParams& p) {
     return std::make_unique<Levy1Swimmer>(p.v_A, p.beta, p.dt);
 #elif defined(PROCESS_LEVY2)
     return std::make_unique<Levy2Swimmer>(p.v_A, p.beta, p.dt, p.tau_0);
+#elif defined(PROCESS_BMSHORT)
+    return std::make_unique<BMShortSwimmer>(p.D_bm, p.dt);
 #else
-#error "No process defined. Compile with -DPROCESS_AOUP, -DPROCESS_ABP, -DPROCESS_RTP, -DPROCESS_LEVY1, or -DPROCESS_LEVY2"
+#error "No process defined. Compile with -DPROCESS_AOUP, -DPROCESS_ABP, -DPROCESS_RTP, -DPROCESS_LEVY1, -DPROCESS_LEVY2, or -DPROCESS_BMSHORT"
 #endif
 }
 
@@ -53,6 +61,8 @@ inline std::string process_name() {
     return "levy1";
 #elif defined(PROCESS_LEVY2)
     return "levy2";
+#elif defined(PROCESS_BMSHORT)
+    return "bmshort";
 #else
     return "unknown";
 #endif

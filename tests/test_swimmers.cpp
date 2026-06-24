@@ -4,6 +4,7 @@
 #include "rtp_swimmer.h"
 #include "levy1_swimmer.h"
 #include "levy2_swimmer.h"
+#include "bmshort_swimmer.h"
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -214,6 +215,39 @@ int main() {
         RTPSwimmer   rtp(1.0, 1.0, dt);        test_isotropy(rtp,   "RTP");
         Levy1Swimmer lv1(1.0, 1.5, dt);        test_isotropy(lv1,   "Levy1");
         Levy2Swimmer lv2(1.0, 0.5, dt, 0.1);  test_isotropy(lv2,   "Levy2");
+    }
+
+    // ---- BMShort: MSD = 4*D*t in 2D ----
+    {
+        const double D = 1.0, t = 100.0;
+        BMShortSwimmer sw(D, dt);
+        double msd = 0.0;
+        const int n_traj = 5000;
+        for (int i = 0; i < n_traj; ++i) {
+            auto state = sw.init(0.0, 0.0, rng);
+            int steps = static_cast<int>(t / dt);
+            for (int s = 0; s < steps; ++s) sw.step(state, rng);
+            msd += state.x * state.x + state.y * state.y;
+        }
+        msd /= n_traj;
+        check(approx(msd, 4.0 * D * t, 0.05 * 4.0 * D * t), "BMShort MSD = 4*D*t in 2D");
+    }
+
+    // ---- BMShort: construction throws for D <= 0 ----
+    {
+        bool threw = false;
+        try { BMShortSwimmer sw(0.0, dt); }
+        catch (const std::invalid_argument&) { threw = true; }
+        check(threw, "BMShort throws std::invalid_argument for D <= 0");
+    }
+
+    // ---- BMShort: orientation is always a unit vector (dummy {1,0}) ----
+    {
+        BMShortSwimmer sw(1.0, dt);
+        auto state = sw.init(0.0, 0.0, rng);
+        auto n = sw.orientation(state);
+        check(approx(std::sqrt(n[0]*n[0]+n[1]*n[1]), 1.0, 1e-14),
+              "BMShort orientation is always a unit vector");
     }
 
     std::cout << "All swimmer tests passed.\n";
