@@ -31,8 +31,12 @@ Produces five binaries in `build/`:
 - **bmshort**: 2D Brownian motion swimmer (`dX = sqrt(2*D_bm)*dW`), radial Gaussian force
   `f(x) = (V_0/sigma^2)*exp(-|x|^2/(2*sigma^2))*x1`. Used for troubleshooting: force is isotropic,
   no singularity, theory fully worked out. Limit distribution = M_0 (bilateral exponential),
-  CF = 1/(1+k^2). Key check: `<A^2>(T) = 2*C*T` (linear in T). Extra output: `mu2_bmshort.csv`
-  with weighted `<A(t)^2>` at integer times t=1,...,T. Validate with `python scripts/check_C.py`.
+  CF = 1/(1+k^2). Key check: `<A^2>(T) ~ C*log(T)` (logarithmic growth in T). The log scaling
+  arises because 2D BM is null-recurrent: the occupation time of the Gaussian force region
+  (radius ~ sigma) starting from impact parameter b scales as `(sigma^2/D)*log(DT/b^2)`, so
+  the variance of the scattering increment grows as `log(T)` rather than `T`.
+  Extra output: `mu2_bmshort.csv` with weighted `<A(t)^2>` at integer times t=1,...,T.
+  Validate with `python scripts/check_C.py` (fits C*log(t) to large-t data).
 - **levy2**: fixed speed `v_A`, run times drawn from `P(tau > t) = (tau_0/t)^beta` with `0 < beta < 1`
   (divergent mean run time, superdiffusive long-time behaviour). `tau_0` is an explicit physical
   parameter (minimum run time, independent of `dt`); requires `tau_0 >= 10*dt`.
