@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
     // bmshort defaults: Gaussian force, no singularity so b_min ~ 0
     p.force = {ForceType::GAUSSIAN, 1.0, 0.01, 1.0, 1.0};
     p.sampling.b_min = 0.01;
-    p.sampling.b_max = 5.0;
+    p.sampling.b_max = 100.0;
 #else
     p.force = {ForceType::DIPOLE, 1.0, 0.5, 1.0, 1.0};
 #endif

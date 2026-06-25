@@ -151,29 +151,50 @@ void run_simulation(const SimParams& params) {
     }
 #endif
 
-    // Write config
+    // Write config (only parameters relevant for this process and force)
     {
         std::string config_path = params.output.substr(0, params.output.rfind('/') + 1) + "config_" + process_name() + ".txt";
         std::ofstream cfg(config_path);
-        cfg << "process = " << process_name()          << "\n"
-            << "tau_c   = " << params.process.tau_c    << "\n"
-            << "D_A     = " << params.process.D_A      << "\n"
-            << "v_A     = " << params.process.v_A      << "\n"
-            << "D_r     = " << params.process.D_r      << "\n"
-            << "omega   = " << params.process.omega     << "\n"
-            << "beta    = " << params.process.beta      << "\n"
-            << "tau_0   = " << params.process.tau_0     << "\n"
-            << "D_bm    = " << params.process.D_bm      << "\n"
-            << "V_0     = " << params.process.V_0       << "\n"
-            << "sigma   = " << params.process.sigma      << "\n"
-            << "dt      = " << params.process.dt        << "\n"
-            << "p       = " << params.force.p           << "\n"
-            << "b_min   = " << params.force.b_min       << "\n"
-            << "b_max   = " << params.sampling.b_max    << "\n"
-            << "gamma   = " << params.sampling.gamma    << "\n"
-            << "T       = " << params.T                 << "\n"
-            << "N_traj  = " << params.N_traj            << "\n"
-            << "seed    = " << params.seed              << "\n";
+        cfg << "process = " << process_name() << "\n";
+
+#if defined(PROCESS_AOUP)
+        cfg << "tau_c   = " << params.process.tau_c << "\n"
+            << "D_A     = " << params.process.D_A   << "\n"
+            << "p       = " << params.force.p       << "\n"
+            << "b_min   = " << params.force.b_min   << "\n";
+#elif defined(PROCESS_ABP)
+        cfg << "v_A     = " << params.process.v_A   << "\n"
+            << "D_r     = " << params.process.D_r   << "\n"
+            << "p       = " << params.force.p       << "\n"
+            << "b_min   = " << params.force.b_min   << "\n";
+#elif defined(PROCESS_RTP)
+        cfg << "v_A     = " << params.process.v_A   << "\n"
+            << "omega   = " << params.process.omega  << "\n"
+            << "p       = " << params.force.p       << "\n"
+            << "b_min   = " << params.force.b_min   << "\n";
+#elif defined(PROCESS_LEVY1)
+        cfg << "v_A     = " << params.process.v_A   << "\n"
+            << "beta    = " << params.process.beta   << "\n"
+            << "p       = " << params.force.p       << "\n"
+            << "b_min   = " << params.force.b_min   << "\n";
+#elif defined(PROCESS_LEVY2)
+        cfg << "v_A     = " << params.process.v_A   << "\n"
+            << "beta    = " << params.process.beta   << "\n"
+            << "tau_0   = " << params.process.tau_0  << "\n"
+            << "p       = " << params.force.p       << "\n"
+            << "b_min   = " << params.force.b_min   << "\n";
+#elif defined(PROCESS_BMSHORT)
+        cfg << "D_bm    = " << params.process.D_bm   << "\n"
+            << "V_0     = " << params.process.V_0    << "\n"
+            << "sigma   = " << params.process.sigma   << "\n"
+            << "b_min   = " << params.force.b_min    << "\n";
+#endif
+        cfg << "b_max   = " << params.sampling.b_max << "\n"
+            << "gamma   = " << params.sampling.gamma << "\n"
+            << "dt      = " << params.process.dt     << "\n"
+            << "T       = " << params.T              << "\n"
+            << "N_traj  = " << params.N_traj         << "\n"
+            << "seed    = " << params.seed           << "\n";
         std::cout << "Config written to " << config_path << "\n";
     }
 
