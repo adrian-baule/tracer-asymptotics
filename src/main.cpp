@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 
 int main(int argc, char* argv[]) {
     SimParams p;
@@ -18,7 +19,7 @@ int main(int argc, char* argv[]) {
     // bmshort defaults: Gaussian force, no singularity so b_min ~ 0
     p.force = {ForceType::GAUSSIAN, 1.0, 0.01, 1.0, 1.0};
     p.sampling.b_min = 0.01;
-    p.sampling.b_max = 100.0;
+    p.sampling.b_max = -1.0;  // sentinel: auto-compute as sqrt(D_bm * T)
 #else
     p.force = {ForceType::DIPOLE, 1.0, 0.5, 1.0, 1.0};
 #endif
@@ -48,6 +49,12 @@ int main(int argc, char* argv[]) {
         else if (!strcmp(argv[i], "--output")) p.output         = argv[++i];
         else { std::cerr << "Unknown argument: " << argv[i] << "\n"; return 1; }
     }
+
+#if defined(PROCESS_BMSHORT)
+    // Auto-set b_max = sqrt(D_bm * T) if the user did not provide --b_max
+    if (p.sampling.b_max < 0.0)
+        p.sampling.b_max = std::sqrt(p.process.D_bm * p.T);
+#endif
 
     if (process_name() == "levy2" && p.process.tau_0 < 100.0 * p.process.dt)
         std::cerr << "Warning: tau_0/dt = " << p.process.tau_0 / p.process.dt
