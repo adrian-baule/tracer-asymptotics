@@ -11,7 +11,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
 find_package(OpenMP REQUIRED)
 
 # One binary per swimmer process
-foreach(PROC aoup abp rtp levy1 levy2 bmshort)
+foreach(PROC aoup abp rtp levy1 levy2 bmshort bmlong)
     string(TOUPPER ${PROC} PROC_UPPER)
     add_executable(tracer_${PROC}
         src/main.cpp
@@ -39,3 +39,8 @@ add_executable(test_swimmers tests/test_swimmers.cpp src/force.cpp src/sampling.
 target_include_directories(test_swimmers PRIVATE include)
 target_compile_definitions(test_swimmers PRIVATE PROCESS_AOUP)
 add_test(NAME test_swimmers COMMAND test_swimmers)
+
+add_executable(test_bmlong tests/test_bmlong.cpp src/force.cpp)
+target_include_directories(test_bmlong PRIVATE include)
+target_compile_definitions(test_bmlong PRIVATE PROCESS_BMLONG)
+add_test(NAME test_bmlong COMMAND test_bmlong)

@@ -16,17 +16,36 @@ void run_simulation(const SimParams& params) {
 
 #if defined(PROCESS_BMSHORT)
     // Gaussian force: precompute V_0/sigma^2 and 1/(2*sigma^2)
-    const double inv_s2     = 1.0 / (params.force.sigma * params.force.sigma);
-    const double force_pref = params.force.V_0 * inv_s2;
+    const double inv_s2      = 1.0 / (params.force.sigma * params.force.sigma);
+    const double force_pref  = params.force.V_0 * inv_s2;
     const double half_inv_s2 = 0.5 * inv_s2;
-    const int T_int = static_cast<int>(params.T);  // integer-time checkpoints
+    const int T_int = static_cast<int>(params.T);
 
-    // Thread-local accumulators for mu2, reduced after parallel region
+    // Thread-local accumulators for weighted <A1^2>(t), reduced after parallel region
     int n_threads_used = 1;
     #pragma omp parallel
     { n_threads_used = omp_get_num_threads(); }
-    std::vector<std::vector<double>> tl_wA2(n_threads_used, std::vector<double>(T_int, 0.0));
-    std::vector<std::vector<double>> tl_w  (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1sq(n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_w    (n_threads_used, std::vector<double>(T_int, 0.0));
+
+#elif defined(PROCESS_BMLONG)
+    // Coulomb force parameters
+    const double sigma_c = params.force.sigma;  // Coulomb strength
+    const double b_min_c = params.force.b_min;
+    const double mu      = params.mu;
+    const int T_int = static_cast<int>(params.T);
+
+    int n_threads_used = 1;
+    #pragma omp parallel
+    { n_threads_used = omp_get_num_threads(); }
+    // 5 accumulator arrays per thread: sum_w, sum_wA1, sum_wA1sq, sum_wA2, sum_wA2sq
+    std::vector<std::vector<double>> tl_w    (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1  (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1sq(n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA2  (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA2sq(n_threads_used, std::vector<double>(T_int, 0.0));
+    long long total_clamps = 0;
+
 #else
     // Dipole force: precompute constants
     const double p         = params.force.p;
@@ -44,7 +63,11 @@ void run_simulation(const SimParams& params) {
         auto swimmer = make_swimmer(params.process);
 
 #if defined(PROCESS_BMSHORT)
-        std::vector<double> A_snap(T_int, 0.0);
+        std::vector<double> A1_snap(T_int, 0.0);
+#elif defined(PROCESS_BMLONG)
+        std::vector<double> A1_snap(T_int, 0.0);
+        std::vector<double> A2_snap(T_int, 0.0);
+        long long local_clamps = 0;
 #endif
 
         #pragma omp for schedule(dynamic, 64)
@@ -59,28 +82,76 @@ void run_simulation(const SimParams& params) {
             double A = 0.0;
 
 #if defined(PROCESS_BMSHORT)
-            // Accumulate A and record at integer-time checkpoints
-            int next_snap = 0;  // next checkpoint index (t = next_snap + 1)
+            // Accumulate A1 (= mu*Avec_x for Gaussian force, mu=1 implicit) and record at
+            // integer-time checkpoints
+            int next_snap = 0;
             for (int s = 0; s < n_steps; ++s) {
                 double x = state.x, y = state.y;
                 double r2 = x*x + y*y;
                 A += force_pref * std::exp(-half_inv_s2 * r2) * x * dt;
                 swimmer->step(state, rng);
-                // Record A whenever time crosses an integer: t = (s+1)*dt
                 double t_now = (s + 1) * dt;
                 while (next_snap < T_int && (next_snap + 1) <= t_now + 1e-12) {
-                    A_snap[next_snap] = A;
+                    A1_snap[next_snap] = A;
                     ++next_snap;
                 }
             }
-            // Fill any remaining checkpoints (if T is not exactly an integer)
-            while (next_snap < T_int) { A_snap[next_snap] = A; ++next_snap; }
+            while (next_snap < T_int) { A1_snap[next_snap] = A; ++next_snap; }
 
             double w = b * b;
             for (int k = 0; k < T_int; ++k) {
-                tl_wA2[tid][k] += w * A_snap[k] * A_snap[k];
-                tl_w  [tid][k] += w;
+                tl_wA1sq[tid][k] += w * A1_snap[k] * A1_snap[k];
+                tl_w    [tid][k] += w;
             }
+
+#elif defined(PROCESS_BMLONG)
+            // A1x(t) = mu * Avec_x(t)  where Avec_x = int_0^t Fx ds
+            // A2x(t) = -mu^2 * int_0^t [grad F(Y_u)^T Avec(u)]_x du
+            //
+            // ORDERING: A2 is updated with the CURRENT Avec (memory up to s < u),
+            // then Avec is advanced. This respects the s < u time-ordering of the
+            // nested integral (inner integral excludes the current instant).
+            double Avec_x = 0.0, Avec_y = 0.0, A2x = 0.0;
+            int next_snap = 0;
+            for (int s = 0; s < n_steps; ++s) {
+                auto ce = coulomb_eval(state.x, state.y, sigma_c, b_min_c);
+                if (ce.clamped) ++local_clamps;
+
+                // Step 1: update A2 using Avec BEFORE advancing Avec (s < u ordering)
+                double gx = ce.dxFx * Avec_x + ce.dyFx * Avec_y;
+                A2x -= mu * mu * gx * dt;
+
+                // Step 2: advance Avec (memory for future steps)
+                Avec_x += ce.Fx * dt;
+                Avec_y += ce.Fy * dt;
+
+                // Step 3: advance swimmer
+                swimmer->step(state, rng);
+
+                // Checkpoint: record A1x = mu*Avec_x and A2x at integer times
+                double t_now = (s + 1) * dt;
+                while (next_snap < T_int && (next_snap + 1) <= t_now + 1e-12) {
+                    A1_snap[next_snap] = mu * Avec_x;
+                    A2_snap[next_snap] = A2x;
+                    ++next_snap;
+                }
+            }
+            while (next_snap < T_int) {
+                A1_snap[next_snap] = mu * Avec_x;
+                A2_snap[next_snap] = A2x;
+                ++next_snap;
+            }
+            A = mu * Avec_x;  // final A1x for main output
+
+            double w = b * b;
+            for (int k = 0; k < T_int; ++k) {
+                tl_w    [tid][k] += w;
+                tl_wA1  [tid][k] += w * A1_snap[k];
+                tl_wA1sq[tid][k] += w * A1_snap[k] * A1_snap[k];
+                tl_wA2  [tid][k] += w * A2_snap[k];
+                tl_wA2sq[tid][k] += w * A2_snap[k] * A2_snap[k];
+            }
+
 #else
             for (int s = 0; s < n_steps; ++s) {
                 auto n  = swimmer->orientation(state);
@@ -99,8 +170,13 @@ void run_simulation(const SimParams& params) {
 
             b_vals[i] = b;
             A_vals[i] = A;
-            w_vals[i] = b * b;  // w(b) ~ b^2 for gamma=-2 log-uniform sampling
+            w_vals[i] = b * b;
         }
+
+#if defined(PROCESS_BMLONG)
+        #pragma omp atomic
+        total_clamps += local_clamps;
+#endif
     }
 
     // Normalise weights so mean(w) = 1
@@ -132,22 +208,58 @@ void run_simulation(const SimParams& params) {
     std::cout << "Weighted Kurt(A)  = " << kurt_A   << "\n";
 
 #if defined(PROCESS_BMSHORT)
-    // Reduce thread-local mu2 accumulators and write mu2_bmshort.csv
+    // Reduce and write A1var_bmshort.csv: weighted <A1^2>(t) vs t
     {
         std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
-        std::string mu2_path = dir + "mu2_bmshort.csv";
-        std::ofstream mu2_out(mu2_path);
-        mu2_out << "t,mu2\n";
-        mu2_out.precision(15);
+        std::string out_path = dir + "A1var_bmshort.csv";
+        std::ofstream fout(out_path);
+        fout << "t,VarA1\n";
+        fout.precision(15);
         for (int k = 0; k < T_int; ++k) {
             double sw2 = 0.0, sw = 0.0;
             for (int t = 0; t < n_threads_used; ++t) {
-                sw2 += tl_wA2[t][k];
-                sw  += tl_w  [t][k];
+                sw2 += tl_wA1sq[t][k];
+                sw  += tl_w    [t][k];
             }
-            mu2_out << (k + 1) << "," << sw2 / sw << "\n";
+            fout << (k + 1) << "," << sw2 / sw << "\n";
         }
-        std::cout << "mu2 written to " << mu2_path << "\n";
+        std::cout << "A1var written to " << out_path << "\n";
+    }
+
+#elif defined(PROCESS_BMLONG)
+    // Reduce and write var_bmlong.csv: VarA1, VarA2, means, ratio vs t
+    {
+        std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
+        std::string out_path = dir + "var_bmlong.csv";
+        std::ofstream fout(out_path);
+        fout << "t,VarA1,VarA2,meanA1,meanA2,ratio\n";
+        fout.precision(15);
+        double final_ratio = 0.0;
+        for (int k = 0; k < T_int; ++k) {
+            double sw = 0.0, swA1 = 0.0, swA1sq = 0.0, swA2 = 0.0, swA2sq = 0.0;
+            for (int t = 0; t < n_threads_used; ++t) {
+                sw     += tl_w    [t][k];
+                swA1   += tl_wA1  [t][k];
+                swA1sq += tl_wA1sq[t][k];
+                swA2   += tl_wA2  [t][k];
+                swA2sq += tl_wA2sq[t][k];
+            }
+            double mA1  = swA1   / sw;
+            double mA2  = swA2   / sw;
+            double vA1  = swA1sq / sw - mA1 * mA1;
+            double vA2  = swA2sq / sw - mA2 * mA2;
+            double ratio = (vA1 > 0.0) ? vA2 / vA1 : 0.0;
+            fout << (k + 1) << "," << vA1 << "," << vA2 << ","
+                 << mA1 << "," << mA2 << "," << ratio << "\n";
+            if (k == T_int - 1) final_ratio = ratio;
+        }
+        double clamp_rate = static_cast<double>(total_clamps) / (static_cast<double>(N) * n_steps);
+        std::cout << "var_bmlong written to " << out_path << "\n";
+        std::cout << "b_max used        = " << params.sampling.b_max
+                  << "  (= sqrt(4*D_bm*T) = " << std::sqrt(4.0 * params.process.D_bm * params.T) << ")\n";
+        std::cout << "mu                = " << params.mu << "\n";
+        std::cout << "Clamp rate        = " << clamp_rate << "  (fraction of steps where r < b_min)\n";
+        std::cout << "Var(A2)/Var(A1) at t=T = " << final_ratio << "\n";
     }
 #endif
 
@@ -188,6 +300,11 @@ void run_simulation(const SimParams& params) {
             << "V_0     = " << params.process.V_0    << "\n"
             << "sigma   = " << params.process.sigma   << "\n"
             << "b_min   = " << params.force.b_min    << "\n";
+#elif defined(PROCESS_BMLONG)
+        cfg << "D_bm    = " << params.process.D_bm   << "\n"
+            << "sigma   = " << params.force.sigma     << "\n"
+            << "b_min   = " << params.force.b_min     << "\n"
+            << "mu      = " << params.mu              << "\n";
 #endif
         cfg << "b_max   = " << params.sampling.b_max << "\n"
             << "gamma   = " << params.sampling.gamma << "\n"

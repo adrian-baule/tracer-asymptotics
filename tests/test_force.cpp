@@ -86,6 +86,51 @@ void test_gaussian_orientation_invariant() {
     std::cout << "PASS: Gaussian force independent of orientation\n";
 }
 
+void test_coulomb_x_value() {
+    // f_x = sigma * x1 / r^3; on-axis (x2=0): f_x = sigma / x1^2
+    double sigma = 2.0, b_min = 0.1, x1 = 3.0;
+    auto e = coulomb_eval(x1, 0.0, sigma, b_min);
+    double expected = sigma / (x1 * x1);
+    assert(std::abs(e.Fx - expected) < 1e-12);
+    std::cout << "PASS: Coulomb f_x magnitude\n";
+}
+
+void test_coulomb_antisymmetry() {
+    // f_x(-x1,-x2) = -f_x(x1,x2)
+    double sigma = 1.5, b_min = 0.1;
+    auto e1 = coulomb_eval( 2.0,  1.0, sigma, b_min);
+    auto e2 = coulomb_eval(-2.0, -1.0, sigma, b_min);
+    assert(std::abs(e1.Fx + e2.Fx) < 1e-12);
+    std::cout << "PASS: Coulomb antisymmetry\n";
+}
+
+void test_coulomb_gradient_fd() {
+    // Finite-difference check of dxFx and dyFx at (x1,x2) = (2.0, 1.5)
+    double sigma = 1.0, b_min = 0.01, h = 1e-6;
+    double x1 = 2.0, x2 = 1.5;
+    auto ep = coulomb_eval(x1 + h, x2, sigma, b_min);
+    auto em = coulomb_eval(x1 - h, x2, sigma, b_min);
+    double fd_dxFx = (ep.Fx - em.Fx) / (2.0 * h);
+    auto e  = coulomb_eval(x1, x2, sigma, b_min);
+    assert(std::abs(fd_dxFx - e.dxFx) < 1e-5);
+
+    auto ep2 = coulomb_eval(x1, x2 + h, sigma, b_min);
+    auto em2 = coulomb_eval(x1, x2 - h, sigma, b_min);
+    double fd_dyFx = (ep2.Fx - em2.Fx) / (2.0 * h);
+    assert(std::abs(fd_dyFx - e.dyFx) < 1e-5);
+    std::cout << "PASS: Coulomb gradient finite-difference check\n";
+}
+
+void test_coulomb_clamp() {
+    // At r < b_min the clamp flag is set and force is evaluated at b_min
+    double sigma = 1.0, b_min = 0.5;
+    auto e = coulomb_eval(0.1, 0.0, sigma, b_min);
+    assert(e.clamped);
+    // After clamping to (b_min, 0): Fx = sigma / b_min^2
+    assert(std::abs(e.Fx - sigma / (b_min * b_min)) < 1e-12);
+    std::cout << "PASS: Coulomb clamp at r < b_min\n";
+}
+
 int main() {
     test_hard_core();
     test_symmetry();
@@ -95,6 +140,10 @@ int main() {
     test_gaussian_maximum();
     test_gaussian_decay();
     test_gaussian_orientation_invariant();
+    test_coulomb_x_value();
+    test_coulomb_antisymmetry();
+    test_coulomb_gradient_fd();
+    test_coulomb_clamp();
     std::cout << "All force tests passed.\n";
     return 0;
 }

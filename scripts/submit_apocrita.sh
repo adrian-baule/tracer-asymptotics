@@ -5,11 +5,14 @@
 
 mkdir -p logs
 
-for PROC in aoup abp rtp levy1 levy2 bmshort; do
+for PROC in aoup abp rtp levy1 levy2 bmshort bmlong; do
     if [ "$PROC" = "levy2" ]; then
         EXTRA_ARGS="--beta 0.5 --tau_0 1.0"
     elif [ "$PROC" = "bmshort" ]; then
-        EXTRA_ARGS="--D_bm 1.0 --V_0 1.0 --sigma 1.0 --b_max 5.0"
+        EXTRA_ARGS="--D_bm 1.0 --V_0 1.0 --sigma 1.0"
+    elif [ "$PROC" = "bmlong" ]; then
+        # b_max auto-computed as sqrt(4*D_bm*T); do not hardcode
+        EXTRA_ARGS="--sigma 1.0 --b_min 0.5 --mu 1.0"
     else
         EXTRA_ARGS=""
     fi

@@ -11,6 +11,7 @@ struct SimParams {
     double T;           // total simulation time per trajectory
     int N_traj;         // number of trajectories
     int seed;           // base RNG seed
+    double mu = 1.0;    // tracer mobility (used by bmlong for A1/A2 scaling)
     std::string output; // output CSV filename
 };
 

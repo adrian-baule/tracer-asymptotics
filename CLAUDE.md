@@ -20,6 +20,7 @@ Produces five binaries in `build/`:
 | `tracer_levy1` | Levy walk, beta > 1 (diffusive)      | `--v_A`, `--beta` |
 | `tracer_levy2` | Levy walk, beta < 1 (superdiffusive) | `--v_A`, `--beta`, `--tau_0` |
 | `tracer_bmshort` | 2D Brownian motion, Gaussian force | `--D_bm`, `--V_0`, `--sigma` |
+| `tracer_bmlong`  | 2D Brownian motion, Coulomb force, A1+A2 diagnostic | `--D_bm`, `--sigma`, `--b_min`, `--mu` |
 
 ## Swimmer processes
 
@@ -37,6 +38,18 @@ Produces five binaries in `build/`:
   the variance of the scattering increment grows as `log(T)` rather than `T`.
   Extra output: `mu2_bmshort.csv` with weighted `<A(t)^2>` at integer times t=1,...,T.
   Validate with `python scripts/check_C.py` (fits C*log(t) to large-t data).
+- **bmlong**: 2D BM swimmer (`dX = sqrt(2*D_bm)*dW`), 2D Coulomb force
+  `F(x) = sigma*x/|x|^3`. Back-reaction diagnostic: accumulates both
+  `A1x(t) = mu * int_0^t F_x(Y_s) ds` (first-order / adiabatic) and
+  `A2x(t) = -mu^2 * int_0^t [grad F(Y_u)^T Avec(u)]_x du` (second-order Picard correction).
+  Outputs `data/var_bmlong.csv` with `t, VarA1, VarA2, meanA1, meanA2, ratio`.
+  Key check: `ratio = Var(A2)/Var(A1)` vs `log(t)`.
+  Flat => adiabatic truncation benign; linear in `log(t)` => logarithmic back-reaction promotion.
+  Theory: `Var(A1) ~ t*log(t)` (marginal Coulomb in 2D); `Var(A2) ~ t*(log t)^a`, `1 <= a <= 3`.
+  `b_max = sqrt(4*D_bm*T)` (auto-computed; scales with sqrt(T)).
+  Validate with `python scripts/check_backreaction.py`.
+  Note: A2 is O(mu^2) and noisier; use large N_traj for clean large-t statistics.
+
 - **levy2**: fixed speed `v_A`, run times drawn from `P(tau > t) = (tau_0/t)^beta` with `0 < beta < 1`
   (divergent mean run time, superdiffusive long-time behaviour). `tau_0` is an explicit physical
   parameter (minimum run time, independent of `dt`); requires `tau_0 >= 10*dt`.

@@ -45,8 +45,10 @@ inline std::unique_ptr<Swimmer> make_swimmer(const ProcessParams& p) {
     return std::make_unique<Levy2Swimmer>(p.v_A, p.beta, p.dt, p.tau_0);
 #elif defined(PROCESS_BMSHORT)
     return std::make_unique<BMShortSwimmer>(p.D_bm, p.dt);
+#elif defined(PROCESS_BMLONG)
+    return std::make_unique<BMShortSwimmer>(p.D_bm, p.dt);  // same BM dynamics, Coulomb force
 #else
-#error "No process defined. Compile with -DPROCESS_AOUP, -DPROCESS_ABP, -DPROCESS_RTP, -DPROCESS_LEVY1, -DPROCESS_LEVY2, or -DPROCESS_BMSHORT"
+#error "No process defined. Compile with -DPROCESS_AOUP, -DPROCESS_ABP, -DPROCESS_RTP, -DPROCESS_LEVY1, -DPROCESS_LEVY2, -DPROCESS_BMSHORT, or -DPROCESS_BMLONG"
 #endif
 }
 
@@ -63,6 +65,8 @@ inline std::string process_name() {
     return "levy2";
 #elif defined(PROCESS_BMSHORT)
     return "bmshort";
+#elif defined(PROCESS_BMLONG)
+    return "bmlong";
 #else
     return "unknown";
 #endif

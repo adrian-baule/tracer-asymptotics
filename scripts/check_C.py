@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="data/mu2_bmshort.csv")
+    parser.add_argument("--data", default="data/A1var_bmshort.csv")
     parser.add_argument("--fit_frac", type=float, default=0.5,
                         help="Fraction of large-t data to use for log fit (default 0.5)")
     args = parser.parse_args()
