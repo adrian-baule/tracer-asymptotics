@@ -24,11 +24,13 @@ void run_simulation(const SimParams& params) {
     int n_threads_used = 1;
     #pragma omp parallel
     { n_threads_used = omp_get_num_threads(); }
-    // Accumulators: sum_w, sum_wA1 (mean), sum_wA1sq (variance), sum_wA1_4 (kurtosis)
+    // Accumulators: w, A1 (mean/var/kurt), A2 (mean/var), matching bmlong column order
     std::vector<std::vector<double>> tl_w    (n_threads_used, std::vector<double>(T_int, 0.0));
     std::vector<std::vector<double>> tl_wA1  (n_threads_used, std::vector<double>(T_int, 0.0));
     std::vector<std::vector<double>> tl_wA1sq(n_threads_used, std::vector<double>(T_int, 0.0));
     std::vector<std::vector<double>> tl_wA1_4(n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA2  (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA2sq(n_threads_used, std::vector<double>(T_int, 0.0));
 
 #elif defined(PROCESS_BMLONG)
     // Coulomb force parameters
@@ -67,6 +69,7 @@ void run_simulation(const SimParams& params) {
 
 #if defined(PROCESS_BMSHORT)
         std::vector<double> A1_snap(T_int, 0.0);
+        std::vector<double> A2_snap(T_int, 0.0);
 #elif defined(PROCESS_BMLONG)
         std::vector<double> A1_snap(T_int, 0.0);
         std::vector<double> A2_snap(T_int, 0.0);
@@ -85,28 +88,57 @@ void run_simulation(const SimParams& params) {
             double A = 0.0;
 
 #if defined(PROCESS_BMSHORT)
+            // A1x = int_0^t F_x(Y_s) ds  (Gaussian force, mu=1)
+            // A2x = -int_0^t [grad F(Y_u)^T Avec(u)]_x du  (Picard correction, mu=1)
+            // Gaussian force gradient:
+            //   d_x F_x = force_pref * exp(-r^2/2s^2) * (1 - x1^2/s^2)
+            //   d_y F_x = force_pref * exp(-r^2/2s^2) * (-x1*x2/s^2)
+            // ORDERING: A2 updated with pre-update Avec (s < u time ordering).
+            double Avec_x = 0.0, Avec_y = 0.0, A2x = 0.0;
             int next_snap = 0;
             for (int s = 0; s < n_steps; ++s) {
                 double x = state.x, y = state.y;
-                double r2 = x*x + y*y;
-                A += force_pref * std::exp(-half_inv_s2 * r2) * x * dt;
+                double r2  = x*x + y*y;
+                double fac = force_pref * std::exp(-half_inv_s2 * r2);
+                double Fx  = fac * x;
+                double Fy  = fac * y;
+                double dxFx = fac * (1.0 - x*x * inv_s2);
+                double dyFx = fac * (-x*y * inv_s2);
+
+                // Step 1: update A2 using current Avec (s < u ordering)
+                A2x -= (dxFx * Avec_x + dyFx * Avec_y) * dt;
+
+                // Step 2: advance Avec
+                Avec_x += Fx * dt;
+                Avec_y += Fy * dt;
+
+                // Step 3: advance swimmer
                 swimmer->step(state, rng);
+
                 double t_now = (s + 1) * dt;
                 while (next_snap < T_int && (next_snap + 1) <= t_now + 1e-12) {
-                    A1_snap[next_snap] = A;
+                    A1_snap[next_snap] = Avec_x;   // mu=1 implicit
+                    A2_snap[next_snap] = A2x;
                     ++next_snap;
                 }
             }
-            while (next_snap < T_int) { A1_snap[next_snap] = A; ++next_snap; }
+            while (next_snap < T_int) {
+                A1_snap[next_snap] = Avec_x;
+                A2_snap[next_snap] = A2x;
+                ++next_snap;
+            }
+            A = Avec_x;  // final A1 for main output
 
             double w = b * b;
             for (int k = 0; k < T_int; ++k) {
-                double a1  = A1_snap[k];
+                double a1   = A1_snap[k];
                 double a1sq = a1 * a1;
                 tl_w    [tid][k] += w;
                 tl_wA1  [tid][k] += w * a1;
                 tl_wA1sq[tid][k] += w * a1sq;
                 tl_wA1_4[tid][k] += w * a1sq * a1sq;
+                tl_wA2  [tid][k] += w * A2_snap[k];
+                tl_wA2sq[tid][k] += w * A2_snap[k] * A2_snap[k];
             }
 
 #elif defined(PROCESS_BMLONG)
@@ -219,26 +251,32 @@ void run_simulation(const SimParams& params) {
     // Returns {sw, swA1, swA1sq, swA1_4} (bmshort) — defined inline below per process
 
 #if defined(PROCESS_BMSHORT)
-    // Write var_bmshort.csv: t, VarA1, meanA1, kurtA1
+    // Write var_bmshort.csv: t, VarA1, VarA2, meanA1, meanA2, ratio, kurtA1
+    // Column order matches var_bmlong.csv.
     {
         std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
         std::string out_path = dir + "var_bmshort.csv";
         std::ofstream fout(out_path);
-        fout << "t,VarA1,meanA1,kurtA1\n";
+        fout << "t,VarA1,VarA2,meanA1,meanA2,ratio,kurtA1\n";
         fout.precision(15);
         for (int k = 0; k < T_int; ++k) {
-            double sw = 0.0, swA1 = 0.0, swA1sq = 0.0, swA1_4 = 0.0;
+            double sw = 0.0, swA1 = 0.0, swA1sq = 0.0, swA1_4 = 0.0, swA2 = 0.0, swA2sq = 0.0;
             for (int t = 0; t < n_threads_used; ++t) {
                 sw     += tl_w    [t][k];
                 swA1   += tl_wA1  [t][k];
                 swA1sq += tl_wA1sq[t][k];
                 swA1_4 += tl_wA1_4[t][k];
+                swA2   += tl_wA2  [t][k];
+                swA2sq += tl_wA2sq[t][k];
             }
             double mA1  = swA1   / sw;
+            double mA2  = swA2   / sw;
             double vA1  = swA1sq / sw - mA1 * mA1;
-            // Kurtosis = E[A1^4] / Var(A1)^2  (using raw 4th moment; mean~0 by symmetry)
-            double kA1  = (vA1 > 0.0) ? (swA1_4 / sw) / (vA1 * vA1) : 0.0;
-            fout << (k + 1) << "," << vA1 << "," << mA1 << "," << kA1 << "\n";
+            double vA2  = swA2sq / sw - mA2 * mA2;
+            double ratio = (vA1 > 0.0) ? vA2 / vA1 : 0.0;
+            double kA1   = (vA1 > 0.0) ? (swA1_4 / sw) / (vA1 * vA1) : 0.0;
+            fout << (k + 1) << "," << vA1 << "," << vA2 << ","
+                 << mA1 << "," << mA2 << "," << ratio << "," << kA1 << "\n";
         }
         std::cout << "var_bmshort written to " << out_path << "\n";
     }
