@@ -29,6 +29,7 @@ def main():
     meanA1 = data[:, 3]
     meanA2 = data[:, 4]
     ratio  = data[:, 5]
+    kurtA1 = data[:, 6] if data.shape[1] > 6 else None
 
     # Fit slope of ratio vs log(t) over large-t regime
     t_thresh = t[-1] * (1.0 - args.fit_frac)
@@ -55,7 +56,7 @@ def main():
     flag2 = " [WARNING: not ~0]" if max_mA2 > 0.1 * np.sqrt(VarA2[-1]) else ""
     print(f"max|mean(A2)|: {max_mA2:.3g}{flag2}")
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 4 if kurtA1 is not None else 3, figsize=(19 if kurtA1 is not None else 15, 5))
 
     # Panel 1: Var(A1) and Var(A2) vs t on log-log
     ax = axes[0]
@@ -91,6 +92,16 @@ def main():
     ax.set_ylabel('Mean')
     ax.set_title(r'Symmetry check: $\langle A_1\rangle$ and $\langle A_2\rangle$ (should be $\approx 0$)')
     ax.legend(fontsize=8)
+
+    # Panel 4: kurtosis of A1 vs t (if available)
+    if kurtA1 is not None:
+        ax = axes[3]
+        ax.semilogx(t, kurtA1, 'g.-', ms=3, label=r'Kurt($A_1$)')
+        ax.axhline(3, color='k', lw=0.8, linestyle='--', label='Gaussian (=3)')
+        ax.set_xlabel('t')
+        ax.set_ylabel(r'Kurtosis($A_1$)')
+        ax.set_title(r'Kurtosis of $A_1$ vs $t$')
+        ax.legend(fontsize=8)
 
     plt.suptitle('bmlong back-reaction diagnostic', y=1.01)
     plt.tight_layout()

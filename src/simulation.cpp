@@ -21,12 +21,14 @@ void run_simulation(const SimParams& params) {
     const double half_inv_s2 = 0.5 * inv_s2;
     const int T_int = static_cast<int>(params.T);
 
-    // Thread-local accumulators for weighted <A1^2>(t), reduced after parallel region
     int n_threads_used = 1;
     #pragma omp parallel
     { n_threads_used = omp_get_num_threads(); }
-    std::vector<std::vector<double>> tl_wA1sq(n_threads_used, std::vector<double>(T_int, 0.0));
+    // Accumulators: sum_w, sum_wA1 (mean), sum_wA1sq (variance), sum_wA1_4 (kurtosis)
     std::vector<std::vector<double>> tl_w    (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1  (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1sq(n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1_4(n_threads_used, std::vector<double>(T_int, 0.0));
 
 #elif defined(PROCESS_BMLONG)
     // Coulomb force parameters
@@ -38,10 +40,11 @@ void run_simulation(const SimParams& params) {
     int n_threads_used = 1;
     #pragma omp parallel
     { n_threads_used = omp_get_num_threads(); }
-    // 5 accumulator arrays per thread: sum_w, sum_wA1, sum_wA1sq, sum_wA2, sum_wA2sq
+    // Accumulators per thread: w, A1, A1sq, A1_4 (kurtosis), A2, A2sq
     std::vector<std::vector<double>> tl_w    (n_threads_used, std::vector<double>(T_int, 0.0));
     std::vector<std::vector<double>> tl_wA1  (n_threads_used, std::vector<double>(T_int, 0.0));
     std::vector<std::vector<double>> tl_wA1sq(n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1_4(n_threads_used, std::vector<double>(T_int, 0.0));
     std::vector<std::vector<double>> tl_wA2  (n_threads_used, std::vector<double>(T_int, 0.0));
     std::vector<std::vector<double>> tl_wA2sq(n_threads_used, std::vector<double>(T_int, 0.0));
     long long total_clamps = 0;
@@ -82,8 +85,6 @@ void run_simulation(const SimParams& params) {
             double A = 0.0;
 
 #if defined(PROCESS_BMSHORT)
-            // Accumulate A1 (= mu*Avec_x for Gaussian force, mu=1 implicit) and record at
-            // integer-time checkpoints
             int next_snap = 0;
             for (int s = 0; s < n_steps; ++s) {
                 double x = state.x, y = state.y;
@@ -100,8 +101,12 @@ void run_simulation(const SimParams& params) {
 
             double w = b * b;
             for (int k = 0; k < T_int; ++k) {
-                tl_wA1sq[tid][k] += w * A1_snap[k] * A1_snap[k];
+                double a1  = A1_snap[k];
+                double a1sq = a1 * a1;
                 tl_w    [tid][k] += w;
+                tl_wA1  [tid][k] += w * a1;
+                tl_wA1sq[tid][k] += w * a1sq;
+                tl_wA1_4[tid][k] += w * a1sq * a1sq;
             }
 
 #elif defined(PROCESS_BMLONG)
@@ -145,9 +150,12 @@ void run_simulation(const SimParams& params) {
 
             double w = b * b;
             for (int k = 0; k < T_int; ++k) {
+                double a1   = A1_snap[k];
+                double a1sq = a1 * a1;
                 tl_w    [tid][k] += w;
-                tl_wA1  [tid][k] += w * A1_snap[k];
-                tl_wA1sq[tid][k] += w * A1_snap[k] * A1_snap[k];
+                tl_wA1  [tid][k] += w * a1;
+                tl_wA1sq[tid][k] += w * a1sq;
+                tl_wA1_4[tid][k] += w * a1sq * a1sq;
                 tl_wA2  [tid][k] += w * A2_snap[k];
                 tl_wA2sq[tid][k] += w * A2_snap[k] * A2_snap[k];
             }
@@ -207,50 +215,61 @@ void run_simulation(const SimParams& params) {
     std::cout << "Weighted Var(A)   = " << var_A    << "\n";
     std::cout << "Weighted Kurt(A)  = " << kurt_A   << "\n";
 
-#if defined(PROCESS_BMSHORT)
-    // Reduce and write A1var_bmshort.csv: weighted <A1^2>(t) vs t
-    {
-        std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
-        std::string out_path = dir + "A1var_bmshort.csv";
-        std::ofstream fout(out_path);
-        fout << "t,VarA1\n";
-        fout.precision(15);
-        for (int k = 0; k < T_int; ++k) {
-            double sw2 = 0.0, sw = 0.0;
-            for (int t = 0; t < n_threads_used; ++t) {
-                sw2 += tl_wA1sq[t][k];
-                sw  += tl_w    [t][k];
-            }
-            fout << (k + 1) << "," << sw2 / sw << "\n";
-        }
-        std::cout << "A1var written to " << out_path << "\n";
-    }
+    // Helper: reduce thread-local accumulators for one checkpoint k
+    // Returns {sw, swA1, swA1sq, swA1_4} (bmshort) — defined inline below per process
 
-#elif defined(PROCESS_BMLONG)
-    // Reduce and write var_bmlong.csv: VarA1, VarA2, means, ratio vs t
+#if defined(PROCESS_BMSHORT)
+    // Write var_bmshort.csv: t, VarA1, meanA1, kurtA1
     {
         std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
-        std::string out_path = dir + "var_bmlong.csv";
+        std::string out_path = dir + "var_bmshort.csv";
         std::ofstream fout(out_path);
-        fout << "t,VarA1,VarA2,meanA1,meanA2,ratio\n";
+        fout << "t,VarA1,meanA1,kurtA1\n";
         fout.precision(15);
-        double final_ratio = 0.0;
         for (int k = 0; k < T_int; ++k) {
-            double sw = 0.0, swA1 = 0.0, swA1sq = 0.0, swA2 = 0.0, swA2sq = 0.0;
+            double sw = 0.0, swA1 = 0.0, swA1sq = 0.0, swA1_4 = 0.0;
             for (int t = 0; t < n_threads_used; ++t) {
                 sw     += tl_w    [t][k];
                 swA1   += tl_wA1  [t][k];
                 swA1sq += tl_wA1sq[t][k];
+                swA1_4 += tl_wA1_4[t][k];
+            }
+            double mA1  = swA1   / sw;
+            double vA1  = swA1sq / sw - mA1 * mA1;
+            // Kurtosis = E[A1^4] / Var(A1)^2  (using raw 4th moment; mean~0 by symmetry)
+            double kA1  = (vA1 > 0.0) ? (swA1_4 / sw) / (vA1 * vA1) : 0.0;
+            fout << (k + 1) << "," << vA1 << "," << mA1 << "," << kA1 << "\n";
+        }
+        std::cout << "var_bmshort written to " << out_path << "\n";
+    }
+
+#elif defined(PROCESS_BMLONG)
+    // Write var_bmlong.csv: t, VarA1, VarA2, meanA1, meanA2, ratio, kurtA1
+    {
+        std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
+        std::string out_path = dir + "var_bmlong.csv";
+        std::ofstream fout(out_path);
+        fout << "t,VarA1,VarA2,meanA1,meanA2,ratio,kurtA1\n";
+        fout.precision(15);
+        double final_ratio = 0.0;
+        for (int k = 0; k < T_int; ++k) {
+            double sw = 0.0, swA1 = 0.0, swA1sq = 0.0, swA1_4 = 0.0, swA2 = 0.0, swA2sq = 0.0;
+            for (int t = 0; t < n_threads_used; ++t) {
+                sw     += tl_w    [t][k];
+                swA1   += tl_wA1  [t][k];
+                swA1sq += tl_wA1sq[t][k];
+                swA1_4 += tl_wA1_4[t][k];
                 swA2   += tl_wA2  [t][k];
                 swA2sq += tl_wA2sq[t][k];
             }
-            double mA1  = swA1   / sw;
-            double mA2  = swA2   / sw;
-            double vA1  = swA1sq / sw - mA1 * mA1;
-            double vA2  = swA2sq / sw - mA2 * mA2;
+            double mA1   = swA1   / sw;
+            double mA2   = swA2   / sw;
+            double vA1   = swA1sq / sw - mA1 * mA1;
+            double vA2   = swA2sq / sw - mA2 * mA2;
             double ratio = (vA1 > 0.0) ? vA2 / vA1 : 0.0;
+            double kA1   = (vA1 > 0.0) ? (swA1_4 / sw) / (vA1 * vA1) : 0.0;
             fout << (k + 1) << "," << vA1 << "," << vA2 << ","
-                 << mA1 << "," << mA2 << "," << ratio << "\n";
+                 << mA1 << "," << mA2 << "," << ratio << "," << kA1 << "\n";
             if (k == T_int - 1) final_ratio = ratio;
         }
         double clamp_rate = static_cast<double>(total_clamps) / (static_cast<double>(N) * n_steps);
