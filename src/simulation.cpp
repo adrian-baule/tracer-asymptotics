@@ -313,7 +313,7 @@ void run_simulation(const SimParams& params) {
         double clamp_rate = static_cast<double>(total_clamps) / (static_cast<double>(N) * n_steps);
         std::cout << "var_bmlong written to " << out_path << "\n";
         std::cout << "b_max used        = " << params.sampling.b_max
-                  << "  (= sqrt(4*D_bm*T) = " << std::sqrt(4.0 * params.process.D_bm * params.T) << ")\n";
+                  << "  (= 2*sqrt(4*D_bm*T) = " << 2.0 * std::sqrt(4.0 * params.process.D_bm * params.T) << ")\n";
         std::cout << "mu                = " << params.mu << "\n";
         std::cout << "Clamp rate        = " << clamp_rate << "  (fraction of steps where r < b_min)\n";
         std::cout << "Var(A2)/Var(A1) at t=T = " << final_ratio << "\n";

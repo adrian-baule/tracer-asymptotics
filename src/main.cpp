@@ -67,12 +67,9 @@ int main(int argc, char* argv[]) {
     if (p.output.empty())
         p.output = output_dir + "samples_" + process_name() + ".csv";
 
-#if defined(PROCESS_BMSHORT)
+#if defined(PROCESS_BMSHORT) || defined(PROCESS_BMLONG)
     if (p.sampling.b_max < 0.0)
-        p.sampling.b_max = std::sqrt(4.0 * p.process.D_bm * p.T);
-#elif defined(PROCESS_BMLONG)
-    if (p.sampling.b_max < 0.0)
-        p.sampling.b_max = std::sqrt(4.0 * p.process.D_bm * p.T);
+        p.sampling.b_max = 2.0 * std::sqrt(4.0 * p.process.D_bm * p.T);
 #endif
 
     if (process_name() == "levy2" && p.process.tau_0 < 100.0 * p.process.dt)
@@ -84,12 +81,12 @@ int main(int argc, char* argv[]) {
 #if defined(PROCESS_BMSHORT)
     std::cout << "D_bm=" << p.process.D_bm << " V_0=" << p.process.V_0
               << " sigma=" << p.process.sigma << "\n";
-    std::cout << "b_max = " << p.sampling.b_max << " = sqrt(4*D_bm*T)\n";
+    std::cout << "b_max = " << p.sampling.b_max << " = 2*sqrt(4*D_bm*T)\n";
 #elif defined(PROCESS_BMLONG)
     std::cout << "D_bm=" << p.process.D_bm << " sigma=" << p.force.sigma
               << " b_min=" << p.force.b_min << " mu=" << p.mu << "\n";
     std::cout << "Warning: b_max = " << p.sampling.b_max
-              << " = sqrt(4*D_bm*T); scales as sqrt(T).\n";
+              << " = 2*sqrt(4*D_bm*T); scales as sqrt(T).\n";
 #else
     std::cout << "tau_c=" << p.process.tau_c << " D_A=" << p.process.D_A
               << " v_A=" << p.process.v_A   << " D_r=" << p.process.D_r
