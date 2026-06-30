@@ -58,6 +58,9 @@ void run_simulation(const SimParams& params) {
 #endif
 
     std::vector<double> A_vals(N), b_vals(N), w_vals(N);
+#if defined(PROCESS_BMSHORT) || defined(PROCESS_BMLONG)
+    std::vector<double> A2_vals(N, 0.0);
+#endif
 
     #pragma omp parallel
     {
@@ -128,6 +131,7 @@ void run_simulation(const SimParams& params) {
                 ++next_snap;
             }
             A = Avec_x;  // final A1 for main output
+            A2_vals[i] = A2x;
 
             double w = b * b;
             for (int k = 0; k < T_int; ++k) {
@@ -179,6 +183,7 @@ void run_simulation(const SimParams& params) {
                 ++next_snap;
             }
             A = mu * Avec_x;  // final A1x for main output
+            A2_vals[i] = A2x;
 
             double w = b * b;
             for (int k = 0; k < T_int; ++k) {
@@ -377,9 +382,15 @@ void run_simulation(const SimParams& params) {
     // Write raw data
     std::ofstream out(params.output);
     if (!out) { std::cerr << "Error: cannot open " << params.output << "\n"; return; }
-    out << "b,A,w\n";
     out.precision(15);
+#if defined(PROCESS_BMSHORT) || defined(PROCESS_BMLONG)
+    out << "b,A1,A2,w\n";
+    for (int i = 0; i < N; ++i)
+        out << b_vals[i] << "," << A_vals[i] << "," << A2_vals[i] << "," << w_vals[i] << "\n";
+#else
+    out << "b,A,w\n";
     for (int i = 0; i < N; ++i)
         out << b_vals[i] << "," << A_vals[i] << "," << w_vals[i] << "\n";
+#endif
     std::cout << "Output written to " << params.output << "\n";
 }
