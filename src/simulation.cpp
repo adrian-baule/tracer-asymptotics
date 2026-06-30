@@ -257,6 +257,7 @@ void run_simulation(const SimParams& params) {
         std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
         std::string out_path = dir + "var_bmshort.csv";
         std::ofstream fout(out_path);
+        if (!fout) { std::cerr << "Error: cannot open " << out_path << "\n"; return; }
         fout << "t,VarA1,VarA2,meanA1,meanA2,ratio,kurtA1\n";
         fout.precision(15);
         for (int k = 0; k < T_int; ++k) {
@@ -287,6 +288,7 @@ void run_simulation(const SimParams& params) {
         std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
         std::string out_path = dir + "var_bmlong.csv";
         std::ofstream fout(out_path);
+        if (!fout) { std::cerr << "Error: cannot open " << out_path << "\n"; return; }
         fout << "t,VarA1,VarA2,meanA1,meanA2,ratio,kurtA1\n";
         fout.precision(15);
         double final_ratio = 0.0;
@@ -374,6 +376,7 @@ void run_simulation(const SimParams& params) {
 
     // Write raw data
     std::ofstream out(params.output);
+    if (!out) { std::cerr << "Error: cannot open " << params.output << "\n"; return; }
     out << "b,A,w\n";
     out.precision(15);
     for (int i = 0; i < N; ++i)

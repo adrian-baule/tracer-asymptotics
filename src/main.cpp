@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <string>
+#include <filesystem>
 
 int main(int argc, char* argv[]) {
     SimParams p;
@@ -62,6 +63,17 @@ int main(int argc, char* argv[]) {
     // Ensure output_dir has a trailing slash
     if (!output_dir.empty() && output_dir.back() != '/')
         output_dir += '/';
+
+    // Create the output directory if it doesn't exist
+    if (!output_dir.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(output_dir, ec);
+        if (ec) {
+            std::cerr << "Error: cannot create output directory '" << output_dir
+                      << "': " << ec.message() << "\n";
+            return 1;
+        }
+    }
 
     // Derive output path from directory unless --output was given explicitly
     if (p.output.empty())
