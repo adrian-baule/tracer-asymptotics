@@ -44,3 +44,8 @@ add_executable(test_bmlong tests/test_bmlong.cpp src/force.cpp)
 target_include_directories(test_bmlong PRIVATE include)
 target_compile_definitions(test_bmlong PRIVATE PROCESS_BMLONG)
 add_test(NAME test_bmlong COMMAND test_bmlong)
+
+add_executable(test_fd_a2 tests/test_fd_a2.cpp src/force.cpp)
+target_include_directories(test_fd_a2 PRIVATE include)
+target_compile_definitions(test_fd_a2 PRIVATE PROCESS_ABP)
+add_test(NAME test_fd_a2 COMMAND test_fd_a2)

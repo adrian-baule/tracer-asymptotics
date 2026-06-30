@@ -52,15 +52,26 @@ void run_simulation(const SimParams& params) {
     long long total_clamps = 0;
 
 #else
-    // Dipole force: precompute constants
-    const double p         = params.force.p;
-    const double b_min_sq  = params.force.b_min * params.force.b_min;
+    // Dipole force with FD-based A2 accumulator (process-agnostic via force_2d / fd_grad_Fx)
+    const double mu      = params.mu;
+    const double fd_step = params.fd_step;
+    const int T_int      = static_cast<int>(params.T);
+
+    int n_threads_used = 1;
+    #pragma omp parallel
+    { n_threads_used = omp_get_num_threads(); }
+
+    std::vector<std::vector<double>> tl_w    (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1  (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1sq(n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1_4(n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA2  (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA2sq(n_threads_used, std::vector<double>(T_int, 0.0));
+    long long total_nc_guards = 0;
 #endif
 
     std::vector<double> A_vals(N), b_vals(N), w_vals(N);
-#if defined(PROCESS_BMSHORT) || defined(PROCESS_BMLONG)
     std::vector<double> A2_vals(N, 0.0);
-#endif
 
     #pragma omp parallel
     {
@@ -77,6 +88,10 @@ void run_simulation(const SimParams& params) {
         std::vector<double> A1_snap(T_int, 0.0);
         std::vector<double> A2_snap(T_int, 0.0);
         long long local_clamps = 0;
+#else
+        std::vector<double> A1_snap(T_int, 0.0);
+        std::vector<double> A2_snap(T_int, 0.0);
+        long long local_nc = 0;
 #endif
 
         #pragma omp for schedule(dynamic, 64)
@@ -198,18 +213,56 @@ void run_simulation(const SimParams& params) {
             }
 
 #else
+            // Dipole process: FD-based A2 accumulator (process-agnostic)
+            double Avec_x = 0.0, Avec_y = 0.0, A2x = 0.0;
+            int next_snap = 0;
             for (int s = 0; s < n_steps; ++s) {
-                auto n  = swimmer->orientation(state);
+                auto nv = swimmer->orientation(state);
                 double x = state.x, y = state.y;
-                double r2 = x*x + y*y;
-                if (r2 >= b_min_sq) {
-                    double r     = std::sqrt(r2);
-                    double r3    = r2 * r;
-                    double ndotx = n[0]*x + n[1]*y;
-                    double cos2  = (ndotx * ndotx) / r2;
-                    A += (p / r3) * (3.0 * cos2 - 1.0) * x * dt;
-                }
+                double n1 = nv[0], n2 = nv[1];
+
+                // Force vector (used for Avec) and FD gradient (used for A2)
+                auto fv = force_2d(x, y, n1, n2, params.force);
+                auto fg = fd_grad_Fx(x, y, n1, n2, params.force, fd_step);
+                if (fg.near_core) ++local_nc;
+
+                // Update A2 with Avec BEFORE advancing it (s < u time ordering)
+                double gx = fg.dxFx * Avec_x + fg.dyFx * Avec_y;
+                A2x   -= mu * mu * gx * dt;
+
+                // Advance Avec
+                Avec_x += fv[0] * dt;
+                Avec_y += fv[1] * dt;
+
+                // Advance swimmer
                 swimmer->step(state, rng);
+
+                // Checkpoint at integer times
+                double t_now = (s + 1) * dt;
+                while (next_snap < T_int && (next_snap + 1) <= t_now + 1e-12) {
+                    A1_snap[next_snap] = mu * Avec_x;
+                    A2_snap[next_snap] = A2x;
+                    ++next_snap;
+                }
+            }
+            while (next_snap < T_int) {
+                A1_snap[next_snap] = mu * Avec_x;
+                A2_snap[next_snap] = A2x;
+                ++next_snap;
+            }
+            A = mu * Avec_x;
+            A2_vals[i] = A2x;
+
+            double w = b * b;
+            for (int k = 0; k < T_int; ++k) {
+                double a1   = A1_snap[k];
+                double a1sq = a1 * a1;
+                tl_w    [tid][k] += w;
+                tl_wA1  [tid][k] += w * a1;
+                tl_wA1sq[tid][k] += w * a1sq;
+                tl_wA1_4[tid][k] += w * a1sq * a1sq;
+                tl_wA2  [tid][k] += w * A2_snap[k];
+                tl_wA2sq[tid][k] += w * A2_snap[k] * A2_snap[k];
             }
 #endif
 
@@ -221,6 +274,9 @@ void run_simulation(const SimParams& params) {
 #if defined(PROCESS_BMLONG)
         #pragma omp atomic
         total_clamps += local_clamps;
+#elif !defined(PROCESS_BMSHORT)
+        #pragma omp atomic
+        total_nc_guards += local_nc;
 #endif
     }
 
@@ -325,6 +381,44 @@ void run_simulation(const SimParams& params) {
         std::cout << "Clamp rate        = " << clamp_rate << "  (fraction of steps where r < b_min)\n";
         std::cout << "Var(A2)/Var(A1) at t=T = " << final_ratio << "\n";
     }
+#else
+    // Write var_{process}.csv for dipole processes (FD-based A2)
+    {
+        std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
+        std::string out_path = dir + "var_" + process_name() + ".csv";
+        std::ofstream fout(out_path);
+        if (!fout) { std::cerr << "Error: cannot open " << out_path << "\n"; return; }
+        fout << "t,VarA1,VarA2,meanA1,meanA2,ratio,kurtA1\n";
+        fout.precision(15);
+        double final_ratio = 0.0;
+        for (int k = 0; k < T_int; ++k) {
+            double sw = 0.0, swA1 = 0.0, swA1sq = 0.0, swA1_4 = 0.0, swA2 = 0.0, swA2sq = 0.0;
+            for (int t = 0; t < n_threads_used; ++t) {
+                sw     += tl_w    [t][k];
+                swA1   += tl_wA1  [t][k];
+                swA1sq += tl_wA1sq[t][k];
+                swA1_4 += tl_wA1_4[t][k];
+                swA2   += tl_wA2  [t][k];
+                swA2sq += tl_wA2sq[t][k];
+            }
+            double mA1   = swA1   / sw;
+            double mA2   = swA2   / sw;
+            double vA1   = swA1sq / sw - mA1 * mA1;
+            double vA2   = swA2sq / sw - mA2 * mA2;
+            double ratio = (vA1 > 0.0) ? vA2 / vA1 : 0.0;
+            double kA1   = (vA1 > 0.0) ? (swA1_4 / sw) / (vA1 * vA1) : 0.0;
+            fout << (k + 1) << "," << vA1 << "," << vA2 << ","
+                 << mA1 << "," << mA2 << "," << ratio << "," << kA1 << "\n";
+            if (k == T_int - 1) final_ratio = ratio;
+        }
+        double nc_rate = static_cast<double>(total_nc_guards) / (static_cast<double>(N) * n_steps);
+        std::cout << "var_" << process_name() << " written to " << out_path << "\n";
+        std::cout << "FD near-core guard rate  = " << nc_rate << "\n";
+        std::cout << "mu                       = " << mu << "\n";
+        std::cout << "fd_step (h)              = " << fd_step << "\n";
+        std::cout << "Var(A2)/Var(A1) at t=T   = " << final_ratio << "\n";
+        std::cout << "Note: physical ratio scales as mu^2 (measured at mu=" << mu << ")\n";
+    }
 #endif
 
     // Write config (only parameters relevant for this process and force)
@@ -337,28 +431,38 @@ void run_simulation(const SimParams& params) {
         cfg << "tau_c   = " << params.process.tau_c << "\n"
             << "D_A     = " << params.process.D_A   << "\n"
             << "p       = " << params.force.p       << "\n"
-            << "b_min   = " << params.force.b_min   << "\n";
+            << "b_min   = " << params.force.b_min   << "\n"
+            << "mu      = " << params.mu            << "\n"
+            << "fd_step = " << params.fd_step       << "\n";
 #elif defined(PROCESS_ABP)
         cfg << "v_A     = " << params.process.v_A   << "\n"
             << "D_r     = " << params.process.D_r   << "\n"
             << "p       = " << params.force.p       << "\n"
-            << "b_min   = " << params.force.b_min   << "\n";
+            << "b_min   = " << params.force.b_min   << "\n"
+            << "mu      = " << params.mu            << "\n"
+            << "fd_step = " << params.fd_step       << "\n";
 #elif defined(PROCESS_RTP)
         cfg << "v_A     = " << params.process.v_A   << "\n"
             << "omega   = " << params.process.omega  << "\n"
             << "p       = " << params.force.p       << "\n"
-            << "b_min   = " << params.force.b_min   << "\n";
+            << "b_min   = " << params.force.b_min   << "\n"
+            << "mu      = " << params.mu            << "\n"
+            << "fd_step = " << params.fd_step       << "\n";
 #elif defined(PROCESS_LEVY1)
         cfg << "v_A     = " << params.process.v_A   << "\n"
             << "beta    = " << params.process.beta   << "\n"
             << "p       = " << params.force.p       << "\n"
-            << "b_min   = " << params.force.b_min   << "\n";
+            << "b_min   = " << params.force.b_min   << "\n"
+            << "mu      = " << params.mu            << "\n"
+            << "fd_step = " << params.fd_step       << "\n";
 #elif defined(PROCESS_LEVY2)
         cfg << "v_A     = " << params.process.v_A   << "\n"
             << "beta    = " << params.process.beta   << "\n"
             << "tau_0   = " << params.process.tau_0  << "\n"
             << "p       = " << params.force.p       << "\n"
-            << "b_min   = " << params.force.b_min   << "\n";
+            << "b_min   = " << params.force.b_min   << "\n"
+            << "mu      = " << params.mu            << "\n"
+            << "fd_step = " << params.fd_step       << "\n";
 #elif defined(PROCESS_BMSHORT)
         cfg << "D_bm    = " << params.process.D_bm   << "\n"
             << "V_0     = " << params.process.V_0    << "\n"
@@ -383,14 +487,8 @@ void run_simulation(const SimParams& params) {
     std::ofstream out(params.output);
     if (!out) { std::cerr << "Error: cannot open " << params.output << "\n"; return; }
     out.precision(15);
-#if defined(PROCESS_BMSHORT) || defined(PROCESS_BMLONG)
     out << "b,A1,A2,w\n";
     for (int i = 0; i < N; ++i)
         out << b_vals[i] << "," << A_vals[i] << "," << A2_vals[i] << "," << w_vals[i] << "\n";
-#else
-    out << "b,A,w\n";
-    for (int i = 0; i < N; ++i)
-        out << b_vals[i] << "," << A_vals[i] << "," << w_vals[i] << "\n";
-#endif
     std::cout << "Output written to " << params.output << "\n";
 }

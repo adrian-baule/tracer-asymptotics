@@ -11,7 +11,8 @@ struct SimParams {
     double T;           // total simulation time per trajectory
     int N_traj;         // number of trajectories
     int seed;           // base RNG seed
-    double mu = 1.0;    // tracer mobility (used by bmlong for A1/A2 scaling)
+    double mu = 1.0;    // tracer mobility (scales A1 and A2)
+    double fd_step = 1e-4; // finite-difference step for FD gradient of force
     std::string output; // output CSV filename
 };
 

@@ -22,6 +22,13 @@ double force_x(double x1, double x2, double n1, double n2, const ForceParams& pa
 // Full 2D force vector (for diagnostics / A1 accumulation)
 std::array<double, 2> force_2d(double x1, double x2, double n1, double n2, const ForceParams& params);
 
+// FD gradient of F_x w.r.t. position, holding orientation fixed.
+// Uses central differences with step h.  near_core=true if any shifted evaluation
+// point lies inside p.b_min (FD may be unreliable there).
+struct FDGrad { double dxFx, dyFx; bool near_core; };
+FDGrad fd_grad_Fx(double x1, double x2, double n1, double n2,
+                   const ForceParams& p, double h);
+
 // Coulomb evaluation bundle: force vector + x-gradient components needed for A2.
 // r is clamped to b_min before evaluation; clamped=true if the clamp was active.
 struct CoulombEval {

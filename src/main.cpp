@@ -46,6 +46,7 @@ int main(int argc, char* argv[]) {
         else if (!strcmp(argv[i], "--sigma"))      p.process.sigma  = atof(argv[++i]),
                                                    p.force.sigma    = atof(argv[i]);
         else if (!strcmp(argv[i], "--mu"))         p.mu             = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--fd_step"))    p.fd_step        = atof(argv[++i]);
         else if (!strcmp(argv[i], "--dt"))         p.process.dt     = atof(argv[++i]);
         else if (!strcmp(argv[i], "--p"))          p.force.p        = atof(argv[++i]);
         else if (!strcmp(argv[i], "--b_min"))      p.force.b_min    = atof(argv[++i]),

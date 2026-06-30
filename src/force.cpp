@@ -37,6 +37,20 @@ CoulombEval coulomb_eval(double x1, double x2, double sigma, double b_min) {
     return {Fx, Fy, dxFx, dyFx, clamped};
 }
 
+FDGrad fd_grad_Fx(double x1, double x2, double n1, double n2,
+                   const ForceParams& p, double h) {
+    // Central differences: d_x F_x and d_y F_x, orientation n fixed.
+    // near_core guard: flag if any shifted point enters the hard core (r < b_min).
+    double bm = p.b_min;
+    auto nc = [bm](double a, double b) {
+        return std::sqrt(a*a + b*b) < bm;
+    };
+    bool near_core = nc(x1+h, x2) || nc(x1-h, x2) || nc(x1, x2+h) || nc(x1, x2-h);
+    double dxFx = (force_x(x1+h, x2, n1, n2, p) - force_x(x1-h, x2, n1, n2, p)) / (2.0*h);
+    double dyFx = (force_x(x1, x2+h, n1, n2, p) - force_x(x1, x2-h, n1, n2, p)) / (2.0*h);
+    return {dxFx, dyFx, near_core};
+}
+
 double force_x(double x1, double x2, double n1, double n2, const ForceParams& params) {
     switch (params.type) {
         case ForceType::DIPOLE:   return dipole_x(x1, x2, n1, n2, params);
