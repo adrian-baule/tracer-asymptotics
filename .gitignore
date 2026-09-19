@@ -1,5 +1,4 @@
 build/
-data/*.csv
 data/*.png
 data/*.bin
 *.o
