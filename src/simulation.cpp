@@ -62,8 +62,10 @@ void run_simulation(const SimParams& params) {
     // Exact tracer dX/dt = mu*F(Y-X, n), Y = RTP swimmer, 2D dipole force.
     // Three mu values run simultaneously on each swimmer path.
     const int T_int = static_cast<int>(params.T);
-    static constexpr int N_MU = 3;
-    static constexpr double MU_VALS[N_MU] = {0.1, 0.3, 1.0};
+    // Weak-coupling values: the dipole's linear-response scale is
+    // mu* = v_A * b_min^2 / p, so these all satisfy mu << mu*.
+    static constexpr int N_MU = 4;
+    static constexpr double MU_VALS[N_MU] = {0.003, 0.01, 0.03, 0.1};
     const double b_min2 = params.force.b_min * params.force.b_min;
 
     int n_threads_used = 1;
@@ -600,7 +602,9 @@ void run_simulation(const SimParams& params) {
                          / (static_cast<double>(N) * n_steps * N_MU);
         std::cout << "var_exact_rtp written to " << out_path << "\n";
         std::cout << "b_max used     = " << params.sampling.b_max << "\n";
-        std::cout << "mu values      = 0.1, 0.3, 1.0\n";
+        std::cout << "mu values      = 0.003, 0.01, 0.03, 0.1\n";
+        std::cout << "mu* (linear-response scale, v_A*b_min^2/p) = "
+                  << params.process.v_A * b_min2 / params.force.p << "\n";
         std::cout << "Core-hit rate  = " << core_rate
                   << "  (fraction of (step,mu) with |Y-X| < b_min, force = 0 there)\n";
     }
@@ -740,7 +744,9 @@ void run_simulation(const SimParams& params) {
             << "omega   = " << params.process.omega   << "\n"
             << "p       = " << params.force.p        << "\n"
             << "b_min   = " << params.force.b_min    << "\n"
-            << "mu_vals = 0.1, 0.3, 1.0\n";
+            << "mu_vals = 0.003, 0.01, 0.03, 0.1\n"
+            << "mu_star = " << params.process.v_A * params.force.b_min
+                               * params.force.b_min / params.force.p << "\n";
 #endif
         cfg << "b_max   = " << params.sampling.b_max << "\n"
             << "gamma   = " << params.sampling.gamma << "\n"

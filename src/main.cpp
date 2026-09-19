@@ -27,8 +27,11 @@ int main(int argc, char* argv[]) {
     p.sampling.b_min = 0.5;
     p.sampling.b_max = -1.0;  // sentinel: auto-compute as sqrt(4 * D_bm * T)
 #elif defined(PROCESS_RTP_EXACT)
-    p.force = {ForceType::DIPOLE, 1.0, 0.5, 1.0, 1.0};
-    p.sampling.b_min = 0.5;
+    // b_min = 1.0 (not 0.5): caps the dipole force at p/b_min^2 so dt = 1e-3
+    // resolves the near-core dynamics, and raises the linear-response scale
+    // mu* = v_A*b_min^2/p to 1.0 so all four mu values stay weakly coupled.
+    p.force = {ForceType::DIPOLE, 1.0, 1.0, 1.0, 1.0};
+    p.sampling.b_min = 1.0;
     p.sampling.b_max = -1.0;  // sentinel: auto-compute from RTP effective diffusion
     p.T              = 1e4;
 #else
