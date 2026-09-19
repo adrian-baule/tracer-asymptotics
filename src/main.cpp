@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
     p.mu       = 1.0;
     p.output   = "";  // derived from output_dir after arg parsing
 
-#if defined(PROCESS_BMSHORT)
+#if defined(PROCESS_BMSHORT) || defined(PROCESS_BMSHORT_EXACT)
     p.force = {ForceType::GAUSSIAN, 1.0, 0.01, 1.0, 1.0};
     p.sampling.b_min = 0.01;
     p.sampling.b_max = -1.0;  // sentinel: auto-compute as sqrt(4 * D_bm * T)
@@ -80,7 +80,7 @@ int main(int argc, char* argv[]) {
     if (p.output.empty())
         p.output = output_dir + "samples_" + process_name() + ".csv";
 
-#if defined(PROCESS_BMSHORT) || defined(PROCESS_BMLONG)
+#if defined(PROCESS_BMSHORT) || defined(PROCESS_BMLONG) || defined(PROCESS_BMSHORT_EXACT)
     if (p.sampling.b_max < 0.0)
         p.sampling.b_max = 2.0 * std::sqrt(4.0 * p.process.D_bm * p.T);
 #endif
@@ -91,7 +91,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Process: " << process_name() << "\n";
 
-#if defined(PROCESS_BMSHORT)
+#if defined(PROCESS_BMSHORT) || defined(PROCESS_BMSHORT_EXACT)
     std::cout << "D_bm=" << p.process.D_bm << " V_0=" << p.process.V_0
               << " sigma=" << p.process.sigma << "\n";
     std::cout << "b_max = " << p.sampling.b_max << " = 2*sqrt(4*D_bm*T)\n";

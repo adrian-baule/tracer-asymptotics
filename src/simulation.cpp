@@ -32,6 +32,32 @@ void run_simulation(const SimParams& params) {
     std::vector<std::vector<double>> tl_wA2  (n_threads_used, std::vector<double>(T_int, 0.0));
     std::vector<std::vector<double>> tl_wA2sq(n_threads_used, std::vector<double>(T_int, 0.0));
 
+#elif defined(PROCESS_BMSHORT_EXACT)
+    // Exact tracer dX/dt = mu*F(Y-X), Y = 2D BM, Gaussian force.
+    // Four mu values run simultaneously on each swimmer path.
+    const double inv_s2      = 1.0 / (params.force.sigma * params.force.sigma);
+    const double force_pref  = params.force.V_0 * inv_s2;
+    const double half_inv_s2 = 0.5 * inv_s2;
+    const int T_int = static_cast<int>(params.T);
+    static constexpr int N_MU = 4;
+    static constexpr double MU_VALS[N_MU] = {0.1, 0.3, 1.0, 3.0};
+
+    int n_threads_used = 1;
+    #pragma omp parallel
+    { n_threads_used = omp_get_num_threads(); }
+
+    std::vector<std::vector<double>> tl_w    (n_threads_used, std::vector<double>(T_int, 0.0));
+    // tl_wX[thread][mu_idx][t], tl_wXsq[thread][mu_idx][t]
+    std::vector<std::vector<std::vector<double>>> tl_wX  (n_threads_used,
+        std::vector<std::vector<double>>(N_MU, std::vector<double>(T_int, 0.0)));
+    std::vector<std::vector<std::vector<double>>> tl_wXsq(n_threads_used,
+        std::vector<std::vector<double>>(N_MU, std::vector<double>(T_int, 0.0)));
+    // A1 (adiabatic, mu=1 implicit) for direct comparison
+    std::vector<std::vector<double>> tl_wA1  (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1sq(n_threads_used, std::vector<double>(T_int, 0.0));
+    // Store final tracer x-positions for raw output
+    std::vector<std::array<double, N_MU>> X_final(N);
+
 #elif defined(PROCESS_BMLONG)
     // Coulomb force parameters
     const double sigma_c = params.force.sigma;  // Coulomb strength
@@ -84,6 +110,9 @@ void run_simulation(const SimParams& params) {
 #if defined(PROCESS_BMSHORT)
         std::vector<double> A1_snap(T_int, 0.0);
         std::vector<double> A2_snap(T_int, 0.0);
+#elif defined(PROCESS_BMSHORT_EXACT)
+        std::vector<std::array<double, N_MU>> X_snap(T_int);
+        std::vector<double> A1_snap(T_int, 0.0);
 #elif defined(PROCESS_BMLONG)
         std::vector<double> A1_snap(T_int, 0.0);
         std::vector<double> A2_snap(T_int, 0.0);
@@ -158,6 +187,66 @@ void run_simulation(const SimParams& params) {
                 tl_wA1_4[tid][k] += w * a1sq * a1sq;
                 tl_wA2  [tid][k] += w * A2_snap[k];
                 tl_wA2sq[tid][k] += w * A2_snap[k] * A2_snap[k];
+            }
+
+#elif defined(PROCESS_BMSHORT_EXACT)
+            // Exact tracer: dX/dt = mu*F(Y-X), Y free 2D BM, Gaussian force.
+            // Four mu values integrated simultaneously on the same swimmer path.
+            // Also accumulate A1 (adiabatic, mu=1 implicit) for comparison.
+            double Xx[N_MU] = {}, Xy[N_MU] = {};
+            double Avec_x = 0.0, Avec_y = 0.0;
+            int next_snap = 0;
+            for (int s = 0; s < n_steps; ++s) {
+                double Yx = state.x, Yy = state.y;
+
+                // A1: adiabatic force at swimmer position (mu=1 implicit)
+                {
+                    double r2 = Yx*Yx + Yy*Yy;
+                    double fac = force_pref * std::exp(-half_inv_s2 * r2);
+                    Avec_x += fac * Yx * dt;
+                    Avec_y += fac * Yy * dt;
+                }
+
+                // Exact tracer update for each mu
+                for (int k = 0; k < N_MU; ++k) {
+                    double sx = Yx - Xx[k];
+                    double sy = Yy - Xy[k];
+                    double r2 = sx*sx + sy*sy;
+                    double fac = force_pref * std::exp(-half_inv_s2 * r2);
+                    Xx[k] += MU_VALS[k] * fac * sx * dt;
+                    Xy[k] += MU_VALS[k] * fac * sy * dt;
+                }
+
+                swimmer->step(state, rng);
+
+                double t_now = (s + 1) * dt;
+                while (next_snap < T_int && (next_snap + 1) <= t_now + 1e-12) {
+                    for (int k = 0; k < N_MU; ++k) X_snap[next_snap][k] = Xx[k];
+                    A1_snap[next_snap] = Avec_x;
+                    ++next_snap;
+                }
+            }
+            while (next_snap < T_int) {
+                for (int k = 0; k < N_MU; ++k) X_snap[next_snap][k] = Xx[k];
+                A1_snap[next_snap] = Avec_x;
+                ++next_snap;
+            }
+
+            A = Avec_x;  // A1 at T for raw output
+            A2_vals[i] = 0.0;
+            X_final[i] = {Xx[0], Xx[1], Xx[2], Xx[3]};
+
+            {
+                double w = b * b;
+                for (int t = 0; t < T_int; ++t) {
+                    tl_w[tid][t] += w;
+                    for (int k = 0; k < N_MU; ++k) {
+                        tl_wX  [tid][k][t] += w * X_snap[t][k];
+                        tl_wXsq[tid][k][t] += w * X_snap[t][k] * X_snap[t][k];
+                    }
+                    tl_wA1  [tid][t] += w * A1_snap[t];
+                    tl_wA1sq[tid][t] += w * A1_snap[t] * A1_snap[t];
+                }
             }
 
 #elif defined(PROCESS_BMLONG)
@@ -274,7 +363,7 @@ void run_simulation(const SimParams& params) {
 #if defined(PROCESS_BMLONG)
         #pragma omp atomic
         total_clamps += local_clamps;
-#elif !defined(PROCESS_BMSHORT)
+#elif !defined(PROCESS_BMSHORT) && !defined(PROCESS_BMSHORT_EXACT)
         #pragma omp atomic
         total_nc_guards += local_nc;
 #endif
@@ -341,6 +430,46 @@ void run_simulation(const SimParams& params) {
                  << mA1 << "," << mA2 << "," << ratio << "," << kA1 << "\n";
         }
         std::cout << "var_bmshort written to " << out_path << "\n";
+    }
+
+#elif defined(PROCESS_BMSHORT_EXACT)
+    // Write var_exact_bmshort.csv
+    {
+        std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
+        std::string out_path = dir + "var_exact_bmshort.csv";
+        std::ofstream fout(out_path);
+        if (!fout) { std::cerr << "Error: cannot open " << out_path << "\n"; return; }
+        fout << "t";
+        for (int k = 0; k < N_MU; ++k)
+            fout << ",VarX_" << MU_VALS[k] << ",meanX_" << MU_VALS[k];
+        fout << ",VarA1,meanA1\n";
+        fout.precision(15);
+        for (int t = 0; t < T_int; ++t) {
+            double sw = 0.0;
+            for (int th = 0; th < n_threads_used; ++th) sw += tl_w[th][t];
+            fout << (t + 1);
+            for (int k = 0; k < N_MU; ++k) {
+                double swX = 0.0, swXsq = 0.0;
+                for (int th = 0; th < n_threads_used; ++th) {
+                    swX   += tl_wX  [th][k][t];
+                    swXsq += tl_wXsq[th][k][t];
+                }
+                double mX = swX / sw;
+                double vX = swXsq / sw - mX * mX;
+                fout << "," << vX << "," << mX;
+            }
+            double swA1 = 0.0, swA1sq = 0.0;
+            for (int th = 0; th < n_threads_used; ++th) {
+                swA1   += tl_wA1  [th][t];
+                swA1sq += tl_wA1sq[th][t];
+            }
+            double mA1 = swA1 / sw;
+            double vA1 = swA1sq / sw - mA1 * mA1;
+            fout << "," << vA1 << "," << mA1 << "\n";
+        }
+        std::cout << "var_exact_bmshort written to " << out_path << "\n";
+        std::cout << "b_max used = " << params.sampling.b_max << "\n";
+        std::cout << "mu values  = 0.1, 0.3, 1.0, 3.0\n";
     }
 
 #elif defined(PROCESS_BMLONG)
@@ -463,7 +592,7 @@ void run_simulation(const SimParams& params) {
             << "b_min   = " << params.force.b_min   << "\n"
             << "mu      = " << params.mu            << "\n"
             << "fd_step = " << params.fd_step       << "\n";
-#elif defined(PROCESS_BMSHORT)
+#elif defined(PROCESS_BMSHORT) || defined(PROCESS_BMSHORT_EXACT)
         cfg << "D_bm    = " << params.process.D_bm   << "\n"
             << "V_0     = " << params.process.V_0    << "\n"
             << "sigma   = " << params.process.sigma   << "\n"
@@ -487,8 +616,17 @@ void run_simulation(const SimParams& params) {
     std::ofstream out(params.output);
     if (!out) { std::cerr << "Error: cannot open " << params.output << "\n"; return; }
     out.precision(15);
+#if defined(PROCESS_BMSHORT_EXACT)
+    out << "b,X_mu0.10,X_mu0.30,X_mu1.00,X_mu3.00,A1,w\n";
+    for (int i = 0; i < N; ++i)
+        out << b_vals[i] << ","
+            << X_final[i][0] << "," << X_final[i][1] << ","
+            << X_final[i][2] << "," << X_final[i][3] << ","
+            << A_vals[i] << "," << w_vals[i] << "\n";
+#else
     out << "b,A1,A2,w\n";
     for (int i = 0; i < N; ++i)
         out << b_vals[i] << "," << A_vals[i] << "," << A2_vals[i] << "," << w_vals[i] << "\n";
+#endif
     std::cout << "Output written to " << params.output << "\n";
 }

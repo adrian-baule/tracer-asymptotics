@@ -47,8 +47,10 @@ inline std::unique_ptr<Swimmer> make_swimmer(const ProcessParams& p) {
     return std::make_unique<BMShortSwimmer>(p.D_bm, p.dt);
 #elif defined(PROCESS_BMLONG)
     return std::make_unique<BMShortSwimmer>(p.D_bm, p.dt);  // same BM dynamics, Coulomb force
+#elif defined(PROCESS_BMSHORT_EXACT)
+    return std::make_unique<BMShortSwimmer>(p.D_bm, p.dt);  // same BM dynamics, Gaussian force
 #else
-#error "No process defined. Compile with -DPROCESS_AOUP, -DPROCESS_ABP, -DPROCESS_RTP, -DPROCESS_LEVY1, -DPROCESS_LEVY2, -DPROCESS_BMSHORT, or -DPROCESS_BMLONG"
+#error "No process defined. Compile with -DPROCESS_AOUP, -DPROCESS_ABP, -DPROCESS_RTP, -DPROCESS_LEVY1, -DPROCESS_LEVY2, -DPROCESS_BMSHORT, -DPROCESS_BMLONG, or -DPROCESS_BMSHORT_EXACT"
 #endif
 }
 
@@ -67,6 +69,8 @@ inline std::string process_name() {
     return "bmshort";
 #elif defined(PROCESS_BMLONG)
     return "bmlong";
+#elif defined(PROCESS_BMSHORT_EXACT)
+    return "bmshort_exact";
 #else
     return "unknown";
 #endif
