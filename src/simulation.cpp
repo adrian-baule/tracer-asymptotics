@@ -58,6 +58,29 @@ void run_simulation(const SimParams& params) {
     // Store final tracer x-positions for raw output
     std::vector<std::array<double, N_MU>> X_final(N);
 
+#elif defined(PROCESS_RTP_EXACT)
+    // Exact tracer dX/dt = mu*F(Y-X, n), Y = RTP swimmer, 2D dipole force.
+    // Three mu values run simultaneously on each swimmer path.
+    const int T_int = static_cast<int>(params.T);
+    static constexpr int N_MU = 3;
+    static constexpr double MU_VALS[N_MU] = {0.1, 0.3, 1.0};
+    const double b_min2 = params.force.b_min * params.force.b_min;
+
+    int n_threads_used = 1;
+    #pragma omp parallel
+    { n_threads_used = omp_get_num_threads(); }
+
+    std::vector<std::vector<double>> tl_w    (n_threads_used, std::vector<double>(T_int, 0.0));
+    // tl_wX[thread][mu_idx][t], tl_wXsq[thread][mu_idx][t]
+    std::vector<std::vector<std::vector<double>>> tl_wX  (n_threads_used,
+        std::vector<std::vector<double>>(N_MU, std::vector<double>(T_int, 0.0)));
+    std::vector<std::vector<std::vector<double>>> tl_wXsq(n_threads_used,
+        std::vector<std::vector<double>>(N_MU, std::vector<double>(T_int, 0.0)));
+    // A1 (adiabatic, mu=1 implicit) for direct comparison
+    std::vector<std::vector<double>> tl_wA1  (n_threads_used, std::vector<double>(T_int, 0.0));
+    std::vector<std::vector<double>> tl_wA1sq(n_threads_used, std::vector<double>(T_int, 0.0));
+    long long total_core_hits = 0;  // steps where a tracer-swimmer separation entered r < b_min
+
 #elif defined(PROCESS_BMLONG)
     // Coulomb force parameters
     const double sigma_c = params.force.sigma;  // Coulomb strength
@@ -113,6 +136,10 @@ void run_simulation(const SimParams& params) {
 #elif defined(PROCESS_BMSHORT_EXACT)
         std::vector<std::array<double, N_MU>> X_snap(T_int);
         std::vector<double> A1_snap(T_int, 0.0);
+#elif defined(PROCESS_RTP_EXACT)
+        std::vector<std::array<double, N_MU>> X_snap(T_int);
+        std::vector<double> A1_snap(T_int, 0.0);
+        long long local_core = 0;
 #elif defined(PROCESS_BMLONG)
         std::vector<double> A1_snap(T_int, 0.0);
         std::vector<double> A2_snap(T_int, 0.0);
@@ -249,6 +276,65 @@ void run_simulation(const SimParams& params) {
                 }
             }
 
+#elif defined(PROCESS_RTP_EXACT)
+            // Exact tracer: dX/dt = mu*F(Y-X, n), Y free RTP, 2D dipole force.
+            // The dipole force depends on the swimmer orientation n, which is shared
+            // by all mu copies (the swimmer path is unaffected by the tracer).
+            // A1 (adiabatic, mu=1 implicit) evaluates the force at Y, i.e. X = 0.
+            double Xx[N_MU] = {}, Xy[N_MU] = {};
+            double Avec_x = 0.0, Avec_y = 0.0;
+            int next_snap = 0;
+            for (int s = 0; s < n_steps; ++s) {
+                auto nv = swimmer->orientation(state);
+                double n1 = nv[0], n2 = nv[1];
+                double Yx = state.x, Yy = state.y;
+
+                // A1: adiabatic force at the swimmer position (tracer held at origin)
+                auto fA = force_2d(Yx, Yy, n1, n2, params.force);
+                Avec_x += fA[0] * dt;
+                Avec_y += fA[1] * dt;
+
+                // Exact tracer update for each mu, force at the true separation
+                for (int k = 0; k < N_MU; ++k) {
+                    double sx = Yx - Xx[k];
+                    double sy = Yy - Xy[k];
+                    if (sx*sx + sy*sy < b_min2) ++local_core;
+                    auto fv = force_2d(sx, sy, n1, n2, params.force);
+                    Xx[k] += MU_VALS[k] * fv[0] * dt;
+                    Xy[k] += MU_VALS[k] * fv[1] * dt;
+                }
+
+                swimmer->step(state, rng);
+
+                double t_now = (s + 1) * dt;
+                while (next_snap < T_int && (next_snap + 1) <= t_now + 1e-12) {
+                    for (int k = 0; k < N_MU; ++k) X_snap[next_snap][k] = Xx[k];
+                    A1_snap[next_snap] = Avec_x;
+                    ++next_snap;
+                }
+            }
+            while (next_snap < T_int) {
+                for (int k = 0; k < N_MU; ++k) X_snap[next_snap][k] = Xx[k];
+                A1_snap[next_snap] = Avec_x;
+                ++next_snap;
+            }
+
+            A = Avec_x;  // adiabatic A1 at T (stdout diagnostics only)
+            A2_vals[i] = 0.0;
+
+            {
+                double w = b * b;
+                for (int t = 0; t < T_int; ++t) {
+                    tl_w[tid][t] += w;
+                    for (int k = 0; k < N_MU; ++k) {
+                        tl_wX  [tid][k][t] += w * X_snap[t][k];
+                        tl_wXsq[tid][k][t] += w * X_snap[t][k] * X_snap[t][k];
+                    }
+                    tl_wA1  [tid][t] += w * A1_snap[t];
+                    tl_wA1sq[tid][t] += w * A1_snap[t] * A1_snap[t];
+                }
+            }
+
 #elif defined(PROCESS_BMLONG)
             // A1x(t) = mu * Avec_x(t)  where Avec_x = int_0^t Fx ds
             // A2x(t) = -mu^2 * int_0^t [grad F(Y_u)^T Avec(u)]_x du
@@ -363,6 +449,9 @@ void run_simulation(const SimParams& params) {
 #if defined(PROCESS_BMLONG)
         #pragma omp atomic
         total_clamps += local_clamps;
+#elif defined(PROCESS_RTP_EXACT)
+        #pragma omp atomic
+        total_core_hits += local_core;
 #elif !defined(PROCESS_BMSHORT) && !defined(PROCESS_BMSHORT_EXACT)
         #pragma omp atomic
         total_nc_guards += local_nc;
@@ -470,6 +559,50 @@ void run_simulation(const SimParams& params) {
         std::cout << "var_exact_bmshort written to " << out_path << "\n";
         std::cout << "b_max used = " << params.sampling.b_max << "\n";
         std::cout << "mu values  = 0.1, 0.3, 1.0, 3.0\n";
+    }
+
+#elif defined(PROCESS_RTP_EXACT)
+    // Write var_exact_rtp.csv
+    {
+        std::string dir = params.output.substr(0, params.output.rfind('/') + 1);
+        std::string out_path = dir + "var_exact_rtp.csv";
+        std::ofstream fout(out_path);
+        if (!fout) { std::cerr << "Error: cannot open " << out_path << "\n"; return; }
+        fout << "t";
+        for (int k = 0; k < N_MU; ++k)
+            fout << ",VarX_" << MU_VALS[k] << ",meanX_" << MU_VALS[k];
+        fout << ",VarA1,meanA1\n";
+        fout.precision(15);
+        for (int t = 0; t < T_int; ++t) {
+            double sw = 0.0;
+            for (int th = 0; th < n_threads_used; ++th) sw += tl_w[th][t];
+            fout << (t + 1);
+            for (int k = 0; k < N_MU; ++k) {
+                double swX = 0.0, swXsq = 0.0;
+                for (int th = 0; th < n_threads_used; ++th) {
+                    swX   += tl_wX  [th][k][t];
+                    swXsq += tl_wXsq[th][k][t];
+                }
+                double mX = swX / sw;
+                double vX = swXsq / sw - mX * mX;
+                fout << "," << vX << "," << mX;
+            }
+            double swA1 = 0.0, swA1sq = 0.0;
+            for (int th = 0; th < n_threads_used; ++th) {
+                swA1   += tl_wA1  [th][t];
+                swA1sq += tl_wA1sq[th][t];
+            }
+            double mA1 = swA1 / sw;
+            double vA1 = swA1sq / sw - mA1 * mA1;
+            fout << "," << vA1 << "," << mA1 << "\n";
+        }
+        double core_rate = static_cast<double>(total_core_hits)
+                         / (static_cast<double>(N) * n_steps * N_MU);
+        std::cout << "var_exact_rtp written to " << out_path << "\n";
+        std::cout << "b_max used     = " << params.sampling.b_max << "\n";
+        std::cout << "mu values      = 0.1, 0.3, 1.0\n";
+        std::cout << "Core-hit rate  = " << core_rate
+                  << "  (fraction of (step,mu) with |Y-X| < b_min, force = 0 there)\n";
     }
 
 #elif defined(PROCESS_BMLONG)
@@ -602,6 +735,12 @@ void run_simulation(const SimParams& params) {
             << "sigma   = " << params.force.sigma     << "\n"
             << "b_min   = " << params.force.b_min     << "\n"
             << "mu      = " << params.mu              << "\n";
+#elif defined(PROCESS_RTP_EXACT)
+        cfg << "v_A     = " << params.process.v_A    << "\n"
+            << "omega   = " << params.process.omega   << "\n"
+            << "p       = " << params.force.p        << "\n"
+            << "b_min   = " << params.force.b_min    << "\n"
+            << "mu_vals = 0.1, 0.3, 1.0\n";
 #endif
         cfg << "b_max   = " << params.sampling.b_max << "\n"
             << "gamma   = " << params.sampling.gamma << "\n"
@@ -612,6 +751,11 @@ void run_simulation(const SimParams& params) {
         std::cout << "Config written to " << config_path << "\n";
     }
 
+#if defined(PROCESS_RTP_EXACT)
+    // Raw per-trajectory samples are not written: at T = 1e4 the file is impractically
+    // large and all the statistics of interest are already in var_exact_rtp.csv.
+    std::cout << "Raw samples not written (see var_exact_rtp.csv)\n";
+#else
     // Write raw data
     std::ofstream out(params.output);
     if (!out) { std::cerr << "Error: cannot open " << params.output << "\n"; return; }
@@ -629,4 +773,5 @@ void run_simulation(const SimParams& params) {
         out << b_vals[i] << "," << A_vals[i] << "," << A2_vals[i] << "," << w_vals[i] << "\n";
 #endif
     std::cout << "Output written to " << params.output << "\n";
+#endif
 }

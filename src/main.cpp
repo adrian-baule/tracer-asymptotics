@@ -26,6 +26,11 @@ int main(int argc, char* argv[]) {
     p.force = {ForceType::COULOMB, 1.0, 0.5, 1.0, 1.0};
     p.sampling.b_min = 0.5;
     p.sampling.b_max = -1.0;  // sentinel: auto-compute as sqrt(4 * D_bm * T)
+#elif defined(PROCESS_RTP_EXACT)
+    p.force = {ForceType::DIPOLE, 1.0, 0.5, 1.0, 1.0};
+    p.sampling.b_min = 0.5;
+    p.sampling.b_max = -1.0;  // sentinel: auto-compute from RTP effective diffusion
+    p.T              = 1e4;
 #else
     p.force = {ForceType::DIPOLE, 1.0, 0.5, 1.0, 1.0};
 #endif
@@ -83,6 +88,12 @@ int main(int argc, char* argv[]) {
 #if defined(PROCESS_BMSHORT) || defined(PROCESS_BMLONG) || defined(PROCESS_BMSHORT_EXACT)
     if (p.sampling.b_max < 0.0)
         p.sampling.b_max = 2.0 * std::sqrt(4.0 * p.process.D_bm * p.T);
+#elif defined(PROCESS_RTP_EXACT)
+    // 2D RTP effective diffusion: D_eff = v_A^2 / (d * omega) with d = 2
+    if (p.sampling.b_max < 0.0) {
+        double D_eff = p.process.v_A * p.process.v_A / (2.0 * p.process.omega);
+        p.sampling.b_max = 2.0 * std::sqrt(4.0 * D_eff * p.T);
+    }
 #endif
 
     if (process_name() == "levy2" && p.process.tau_0 < 100.0 * p.process.dt)
@@ -100,6 +111,12 @@ int main(int argc, char* argv[]) {
               << " b_min=" << p.force.b_min << " mu=" << p.mu << "\n";
     std::cout << "Warning: b_max = " << p.sampling.b_max
               << " = 2*sqrt(4*D_bm*T); scales as sqrt(T).\n";
+#elif defined(PROCESS_RTP_EXACT)
+    std::cout << "v_A=" << p.process.v_A << " omega=" << p.process.omega
+              << " p=" << p.force.p << " b_min=" << p.force.b_min << "\n";
+    std::cout << "D_eff = v_A^2/(2*omega) = "
+              << p.process.v_A * p.process.v_A / (2.0 * p.process.omega)
+              << ";  b_max = " << p.sampling.b_max << " = 2*sqrt(4*D_eff*T)\n";
 #else
     std::cout << "tau_c=" << p.process.tau_c << " D_A=" << p.process.D_A
               << " v_A=" << p.process.v_A   << " D_r=" << p.process.D_r
