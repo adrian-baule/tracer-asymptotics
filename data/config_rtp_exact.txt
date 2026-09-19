@@ -1,0 +1,13 @@
+process = rtp_exact
+v_A     = 1
+omega   = 1
+p       = 1
+b_min   = 1
+mu_vals = 0.003, 0.01, 0.03, 0.1
+mu_star = 1
+b_max   = 282.843
+gamma   = -2
+dt      = 0.001
+T       = 10000
+N_traj  = 100000
+seed    = 42
