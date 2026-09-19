@@ -54,6 +54,18 @@ int main(int argc, char* argv[]) {
         else if (!strcmp(argv[i], "--sigma"))      p.process.sigma  = atof(argv[++i]),
                                                    p.force.sigma    = atof(argv[i]);
         else if (!strcmp(argv[i], "--mu"))         p.mu             = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--mu_list")) {
+            p.mu_list.clear();
+            std::string spec = argv[++i];
+            size_t pos = 0;
+            while (pos <= spec.size()) {
+                size_t comma = spec.find(',', pos);
+                if (comma == std::string::npos) comma = spec.size();
+                std::string tok = spec.substr(pos, comma - pos);
+                if (!tok.empty()) p.mu_list.push_back(atof(tok.c_str()));
+                pos = comma + 1;
+            }
+        }
         else if (!strcmp(argv[i], "--fd_step"))    p.fd_step        = atof(argv[++i]);
         else if (!strcmp(argv[i], "--dt"))         p.process.dt     = atof(argv[++i]);
         else if (!strcmp(argv[i], "--p"))          p.force.p        = atof(argv[++i]);
@@ -96,6 +108,27 @@ int main(int argc, char* argv[]) {
     if (p.sampling.b_max < 0.0) {
         double D_eff = p.process.v_A * p.process.v_A / (2.0 * p.process.omega);
         p.sampling.b_max = 2.0 * std::sqrt(4.0 * D_eff * p.T);
+    }
+#endif
+
+#if defined(PROCESS_RTP_EXACT) || defined(PROCESS_BMSHORT_EXACT)
+    if (p.mu_list.empty()) {
+  #if defined(PROCESS_RTP_EXACT)
+        p.mu_list = {0.1, 0.3, 1.0, 3.0};
+  #else
+        p.mu_list = {0.1, 0.3, 1.0, 3.0};
+  #endif
+    }
+    if (static_cast<int>(p.mu_list.size()) > MAX_MU) {
+        std::cerr << "Error: --mu_list has " << p.mu_list.size()
+                  << " entries, at most " << MAX_MU << " are supported.\n";
+        return 1;
+    }
+    for (double m : p.mu_list) {
+        if (!(m > 0.0)) {
+            std::cerr << "Error: --mu_list entries must be positive (got " << m << ").\n";
+            return 1;
+        }
     }
 #endif
 

@@ -34,13 +34,15 @@ void run_simulation(const SimParams& params) {
 
 #elif defined(PROCESS_BMSHORT_EXACT)
     // Exact tracer dX/dt = mu*F(Y-X), Y = 2D BM, Gaussian force.
-    // Four mu values run simultaneously on each swimmer path.
+    // All mu values in --mu_list run simultaneously on each swimmer path.
     const double inv_s2      = 1.0 / (params.force.sigma * params.force.sigma);
     const double force_pref  = params.force.V_0 * inv_s2;
     const double half_inv_s2 = 0.5 * inv_s2;
     const int T_int = static_cast<int>(params.T);
-    static constexpr int N_MU = 4;
-    static constexpr double MU_VALS[N_MU] = {0.1, 0.3, 1.0, 3.0};
+    // Mobilities come from --mu_list so the sweep can be retuned without a rebuild.
+    const int N_MU = static_cast<int>(params.mu_list.size());
+    double MU_VALS[MAX_MU] = {};
+    for (int k = 0; k < N_MU; ++k) MU_VALS[k] = params.mu_list[k];
 
     int n_threads_used = 1;
     #pragma omp parallel
@@ -56,16 +58,16 @@ void run_simulation(const SimParams& params) {
     std::vector<std::vector<double>> tl_wA1  (n_threads_used, std::vector<double>(T_int, 0.0));
     std::vector<std::vector<double>> tl_wA1sq(n_threads_used, std::vector<double>(T_int, 0.0));
     // Store final tracer x-positions for raw output
-    std::vector<std::array<double, N_MU>> X_final(N);
+    std::vector<std::array<double, MAX_MU>> X_final(N);
 
 #elif defined(PROCESS_RTP_EXACT)
     // Exact tracer dX/dt = mu*F(Y-X, n), Y = RTP swimmer, 2D dipole force.
-    // Three mu values run simultaneously on each swimmer path.
+    // All mu values in --mu_list run simultaneously on each swimmer path.
     const int T_int = static_cast<int>(params.T);
-    // Weak-coupling values: the dipole's linear-response scale is
-    // mu* = v_A * b_min^2 / p, so these all satisfy mu << mu*.
-    static constexpr int N_MU = 4;
-    static constexpr double MU_VALS[N_MU] = {0.003, 0.01, 0.03, 0.1};
+    // Mobilities come from --mu_list so the sweep can be retuned without a rebuild.
+    const int N_MU = static_cast<int>(params.mu_list.size());
+    double MU_VALS[MAX_MU] = {};
+    for (int k = 0; k < N_MU; ++k) MU_VALS[k] = params.mu_list[k];
     const double b_min2 = params.force.b_min * params.force.b_min;
 
     int n_threads_used = 1;
@@ -136,10 +138,10 @@ void run_simulation(const SimParams& params) {
         std::vector<double> A1_snap(T_int, 0.0);
         std::vector<double> A2_snap(T_int, 0.0);
 #elif defined(PROCESS_BMSHORT_EXACT)
-        std::vector<std::array<double, N_MU>> X_snap(T_int);
+        std::vector<std::array<double, MAX_MU>> X_snap(T_int);
         std::vector<double> A1_snap(T_int, 0.0);
 #elif defined(PROCESS_RTP_EXACT)
-        std::vector<std::array<double, N_MU>> X_snap(T_int);
+        std::vector<std::array<double, MAX_MU>> X_snap(T_int);
         std::vector<double> A1_snap(T_int, 0.0);
         long long local_core = 0;
 #elif defined(PROCESS_BMLONG)
@@ -222,7 +224,7 @@ void run_simulation(const SimParams& params) {
             // Exact tracer: dX/dt = mu*F(Y-X), Y free 2D BM, Gaussian force.
             // Four mu values integrated simultaneously on the same swimmer path.
             // Also accumulate A1 (adiabatic, mu=1 implicit) for comparison.
-            double Xx[N_MU] = {}, Xy[N_MU] = {};
+            double Xx[MAX_MU] = {}, Xy[MAX_MU] = {};
             double Avec_x = 0.0, Avec_y = 0.0;
             int next_snap = 0;
             for (int s = 0; s < n_steps; ++s) {
@@ -283,7 +285,7 @@ void run_simulation(const SimParams& params) {
             // The dipole force depends on the swimmer orientation n, which is shared
             // by all mu copies (the swimmer path is unaffected by the tracer).
             // A1 (adiabatic, mu=1 implicit) evaluates the force at Y, i.e. X = 0.
-            double Xx[N_MU] = {}, Xy[N_MU] = {};
+            double Xx[MAX_MU] = {}, Xy[MAX_MU] = {};
             double Avec_x = 0.0, Avec_y = 0.0;
             int next_snap = 0;
             for (int s = 0; s < n_steps; ++s) {
@@ -560,7 +562,9 @@ void run_simulation(const SimParams& params) {
         }
         std::cout << "var_exact_bmshort written to " << out_path << "\n";
         std::cout << "b_max used = " << params.sampling.b_max << "\n";
-        std::cout << "mu values  = 0.1, 0.3, 1.0, 3.0\n";
+        std::cout << "mu values  = ";
+        for (int k = 0; k < N_MU; ++k) std::cout << (k ? ", " : "") << MU_VALS[k];
+        std::cout << "\n";
     }
 
 #elif defined(PROCESS_RTP_EXACT)
@@ -602,9 +606,12 @@ void run_simulation(const SimParams& params) {
                          / (static_cast<double>(N) * n_steps * N_MU);
         std::cout << "var_exact_rtp written to " << out_path << "\n";
         std::cout << "b_max used     = " << params.sampling.b_max << "\n";
-        std::cout << "mu values      = 0.003, 0.01, 0.03, 0.1\n";
-        std::cout << "mu* (linear-response scale, v_A*b_min^2/p) = "
-                  << params.process.v_A * b_min2 / params.force.p << "\n";
+        std::cout << "mu values      = ";
+        for (int k = 0; k < N_MU; ++k) std::cout << (k ? ", " : "") << MU_VALS[k];
+        std::cout << "\n";
+        std::cout << "mu* (weak-coupling scale, v_A*b_min^2/p) = "
+                  << params.process.v_A * b_min2 / params.force.p
+                  << "  (mu >~ mu*: tracer excursion per encounter ~ b)\n";
         std::cout << "Core-hit rate  = " << core_rate
                   << "  (fraction of (step,mu) with |Y-X| < b_min, force = 0 there)\n";
     }
@@ -743,8 +750,11 @@ void run_simulation(const SimParams& params) {
         cfg << "v_A     = " << params.process.v_A    << "\n"
             << "omega   = " << params.process.omega   << "\n"
             << "p       = " << params.force.p        << "\n"
-            << "b_min   = " << params.force.b_min    << "\n"
-            << "mu_vals = 0.003, 0.01, 0.03, 0.1\n"
+            << "b_min   = " << params.force.b_min    << "\n";
+        cfg << "mu_vals = ";
+        for (size_t k = 0; k < params.mu_list.size(); ++k)
+            cfg << (k ? ", " : "") << params.mu_list[k];
+        cfg << "\n"
             << "mu_star = " << params.process.v_A * params.force.b_min
                                * params.force.b_min / params.force.p << "\n";
 #endif
@@ -767,12 +777,14 @@ void run_simulation(const SimParams& params) {
     if (!out) { std::cerr << "Error: cannot open " << params.output << "\n"; return; }
     out.precision(15);
 #if defined(PROCESS_BMSHORT_EXACT)
-    out << "b,X_mu0.10,X_mu0.30,X_mu1.00,X_mu3.00,A1,w\n";
-    for (int i = 0; i < N; ++i)
-        out << b_vals[i] << ","
-            << X_final[i][0] << "," << X_final[i][1] << ","
-            << X_final[i][2] << "," << X_final[i][3] << ","
-            << A_vals[i] << "," << w_vals[i] << "\n";
+    out << "b";
+    for (int k = 0; k < N_MU; ++k) out << ",X_mu" << MU_VALS[k];
+    out << ",A1,w\n";
+    for (int i = 0; i < N; ++i) {
+        out << b_vals[i];
+        for (int k = 0; k < N_MU; ++k) out << "," << X_final[i][k];
+        out << "," << A_vals[i] << "," << w_vals[i] << "\n";
+    }
 #else
     out << "b,A1,A2,w\n";
     for (int i = 0; i < N; ++i)
